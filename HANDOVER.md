@@ -89,6 +89,16 @@ The product is **not a stub/skeleton** — it's a real, working implementation:
    embedding-capable judge provider is configured. Verified both the
    fallback path and that it doesn't regress existing eval runs. Committed
    as `2a6b900` and pushed to `origin/main`.
+5. Implemented real moderation-API support for the `moderation` assertion
+   (`callOpenAICompatibleModeration`, `moderationCheck` in `app/server.cjs`),
+   reusing the same judge-provider config as embeddings (calls
+   `${judgeBaseUrl}/moderations`). Falls back to the existing local
+   keyword-heuristic (`evaluator: 'local-moderation-approx'`) with a visible
+   reason when no judge provider is configured. Verified the fallback path
+   live. Task #4 (assertion engine parity) marked complete — the two known
+   placeholder assertions are now real-API-backed with honest fallbacks;
+   the n-gram metrics (bleu/gleu/rouge/meteor) and model-graded assertions
+   were already legitimate local/judge implementations, not placeholders.
 
 ## Task list (see TaskList tool — these IDs are live, not just notes)
 
@@ -97,7 +107,8 @@ The product is **not a stub/skeleton** — it's a real, working implementation:
   main remaining known gap is `moderation` assertion (still local heuristic)
   and the `adapter-required` provider list above
 - #3 [pending] Expand provider adapters (azure-openai, bedrock, vertex, etc.)
-- #4 [pending] Assertion engine — `similar*` done, `moderation` still open
+- #4 [done] Assertion engine — `similar*` and `moderation` now real-API-backed
+  with graceful fallback
 - #5 [pending] Red-team plugin/strategy depth (currently generic
   refusal-vs-non-refusal grading per the manual's own admission)
 - #6 [pending] Model-audit real scanner integration (currently metadata-only

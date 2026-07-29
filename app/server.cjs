@@ -943,6 +943,44 @@ async function callOpenAICompatibleEmbedding({ baseUrl, model, apiKey, input }) 
   return vector;
 }
 
+async function callOpenAICompatibleModeration({ baseUrl, apiKey, input }) {
+  const response = await fetch(`${String(baseUrl).replace(/\/$/, '')}/moderations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey || 'local'}`,
+    },
+    body: JSON.stringify({ input }),
+  });
+  const bodyText = await response.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    throw new Error(`Moderation endpoint returned a non-JSON response: ${bodyText.slice(0, 200)}`);
+  }
+  if (!response.ok) {
+    throw new Error(body.error?.message || bodyText || `HTTP ${response.status}`);
+  }
+  const result = body.results?.[0];
+  if (!result) {
+    throw new Error('Moderation response did not include a result');
+  }
+  const categories = Object.entries(result.categories || {})
+    .filter(([, flagged]) => flagged)
+    .map(([category]) => category);
+  return { flagged: Boolean(result.flagged), categories, scores: result.category_scores || null };
+}
+
+async function moderationCheck(target, text) {
+  const judge = judgeConfigForTarget(target);
+  if (!judge || judge.adapter !== 'openai-compatible' || !judge.baseUrl) {
+    throw new Error('No moderation-capable judge provider configured for this target');
+  }
+  const apiKey = await resolveProviderApiKey(target.id, judge);
+  return callOpenAICompatibleModeration({ baseUrl: judge.baseUrl, apiKey, input: text });
+}
+
 async function embeddingSimilarity(target, textA, textB, variant) {
   const judge = judgeConfigForTarget(target);
   if (!judge || judge.adapter !== 'openai-compatible' || !judge.baseUrl) {
@@ -1743,15 +1781,28 @@ async function evaluateAssertion(output, assertion = {}, context = {}) {
     }
     case 'moderation': {
       const expectedState = expected.toLowerCase() || 'safe';
-      const assessment = moderationAssessment(actual);
-      const pass = expectedState === 'unsafe' ? assessment.flagged : !assessment.flagged;
-      return {
-        pass,
-        score: pass ? 1 : 0,
-        flagged: assessment.flagged,
-        categories: assessment.categories,
-        evaluator: 'local-moderation',
-      };
+      try {
+        const assessment = await moderationCheck(context.target, actual);
+        const pass = expectedState === 'unsafe' ? assessment.flagged : !assessment.flagged;
+        return {
+          pass,
+          score: pass ? 1 : 0,
+          flagged: assessment.flagged,
+          categories: assessment.categories,
+          evaluator: 'api-moderation',
+        };
+      } catch (error) {
+        const assessment = moderationAssessment(actual);
+        const pass = expectedState === 'unsafe' ? assessment.flagged : !assessment.flagged;
+        return {
+          pass,
+          score: pass ? 1 : 0,
+          flagged: assessment.flagged,
+          categories: assessment.categories,
+          evaluator: 'local-moderation-approx',
+          approximationReason: error.message,
+        };
+      }
     }
     case 'contains':
     default:
