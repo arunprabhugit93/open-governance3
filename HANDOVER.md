@@ -201,6 +201,41 @@ declared `allowedTools`/`retrievalSources` to simulate a fake resource and
 check whether the model's plan-of-action references it, which is a bigger
 piece of work than the plugins above.
 
+## Change log — iteration 5 (model audit scanners)
+
+10. Replaced the metadata-only model-audit checks with real local static
+    analysis when `audit.artifactPath` resolves to an actual file/directory
+    on disk (`resolveLocalArtifactPath` + `scanArtifactForSecrets` /
+    `scanArtifactForUnsafeSerialization` / `findArtifactFile` in
+    `app/server.cjs`):
+    - Secret exposure: regex scan for AWS/GitHub/Slack keys, generic
+      api_key-shaped assignments, PEM private key headers.
+    - Unsafe code / serialization format: flags pickle-based weight files
+      (.pkl/.pt/.pth/.ckpt/.h5/.joblib — these execute arbitrary code on
+      load) vs. safe formats (safetensors/onnx/gguf/ggml).
+    - SBOM/MBOM and Model card: look for an actual file instead of a
+      metadata checkbox.
+    Falls back to the old metadata-only SBOM check when the path isn't a
+    readable local file (registry references, vendor model names, etc. —
+    most targets), so this is additive for those.
+    **Investigated real promptfoo's own modelaudit**: it's a *separate
+    Python package* (`pip install modelaudit`) that promptfoo's CLI shells
+    out to — not vendored JS source. Reimplementing it wholesale would mean
+    adding a Python runtime dependency to this Node product, which is a
+    much bigger and riskier lift than this session should take on
+    unreviewed. What's implemented here covers the checks that are
+    genuinely doable as local static analysis in this stack; anything else
+    selected as a "scanner" without a dedicated check now says so honestly
+    instead of auto-passing silently (previous behavior: every selected
+    scanner auto-passed with a canned "recorded for evidence collection"
+    message regardless of whether it did anything).
+    Verified against a real fixture directory in scratchpad (not committed):
+    planted a fake AWS key and a `.pkl` file, confirmed both flagged;
+    removed them and added a real SBOM + model card file, confirmed both
+    checks flip to passing. Re-ran against the actual live test target
+    afterward — 6/6 passing, same as before the change (no regression).
+    Committed as `23ddda6`, pushed. Task #6 marked done.
+
 ## Task list (see TaskList tool — these IDs are live, not just notes)
 
 - #1 [done] Get product running locally + smoke test
@@ -217,8 +252,9 @@ piece of work than the plugins above.
 - #5 [in_progress] Red-team plugin/strategy depth — system-prompt-override/
   extraction and pii/canary now have real graders (see iteration 4); the
   agency/injection/tool-abuse plugins still on the generic fallback
-- #6 [pending] Model-audit real scanner integration (currently metadata-only
-  checks)
+- #6 [done] Model-audit real scanner integration — secret exposure, unsafe
+  serialization, SBOM, model-card now do real local scans when the artifact
+  path is a local file/dir (see iteration 5)
 - #7 [in_progress] UX pass — routing/deep-links **done** (see iteration 2
   above); still open: splitting `main.tsx`, broader flow/copy review
 - #8 [pending] Multi-user/roles, auth hardening beyond single admin login
