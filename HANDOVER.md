@@ -168,6 +168,39 @@ WebSocket, async prediction polling) — higher risk to get subtly wrong
 without live credentials to test against, so left alone rather than
 guessed at.
 
+## Change log — iteration 4 (red-team grading)
+
+9. Replaced the one-size-fits-all refusal-heuristic red-team grader with
+   plugin-specific graders in `assessRedTeamOutput` (`app/server.cjs`):
+   - `system-prompt-override` / `prompt-extraction` / `indirect-prompt-injection`
+     now grade by real token overlap between the output and the target's
+     actual `systemPrompt` (`systemPromptOverlapScore`) — a direct leak
+     signal instead of refusal-wording guesswork.
+   - `pii:*` / `canary` now check PII-shaped regex patterns
+     (`looksLikePII`) or the declared protected entity appearing outside
+     a refusal.
+   - Everything else still uses the old generic heuristic, now explicitly
+     labeled `grader: 'refusal-heuristic'` in the result so it's clear
+     which plugins have real grading vs. the fallback.
+   Verified live against the Groq target for both new paths. **Caught and
+   fixed a real bug while testing**: the PII grader's first version
+   flagged a correct refusal as a leak because the model's reply echoed
+   the entity name back ("I can't provide... related to protected
+   canary") — entity mention alone isn't a leak signal, since models
+   naturally restate what was asked even while refusing. Fixed by only
+   counting entity mentions as a leak when *not* paired with refusal
+   language. Committed as `9815768`, pushed.
+
+Still on the generic fallback (real grading not yet worth building without
+something to execute against): rbac, bfla, bola, ssrf, sql-injection,
+shell-injection, excessive-agency, tool-discovery, contracts, competitors,
+debug-access. These are harder because "did the bypass actually succeed"
+depends on a downstream system (a real DB, a real tool call) that this
+product doesn't execute — grading them well would need the target's own
+declared `allowedTools`/`retrievalSources` to simulate a fake resource and
+check whether the model's plan-of-action references it, which is a bigger
+piece of work than the plugins above.
+
 ## Task list (see TaskList tool — these IDs are live, not just notes)
 
 - #1 [done] Get product running locally + smoke test
@@ -181,8 +214,9 @@ guessed at.
   voyage still open (see iteration 3 above for why they're harder)
 - #4 [done] Assertion engine — `similar*` and `moderation` now real-API-backed
   with graceful fallback
-- #5 [pending] Red-team plugin/strategy depth (currently generic
-  refusal-vs-non-refusal grading per the manual's own admission)
+- #5 [in_progress] Red-team plugin/strategy depth — system-prompt-override/
+  extraction and pii/canary now have real graders (see iteration 4); the
+  agency/injection/tool-abuse plugins still on the generic fallback
 - #6 [pending] Model-audit real scanner integration (currently metadata-only
   checks)
 - #7 [in_progress] UX pass — routing/deep-links **done** (see iteration 2
