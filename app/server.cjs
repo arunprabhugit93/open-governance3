@@ -768,6 +768,7 @@ function buildProviderConfig(target) {
         apiKey: item.apiKeySecretId ? `{{secret.${item.apiKeySecretId}}}` : `{{env.${item.apiKeyEnv || apiKeyEnv}}}`,
         apiKeySecretId: item.apiKeySecretId,
         apiKeyMasked: item.apiKeyMasked,
+        apiVersion: item.apiVersion,
         temperature: Number(item.temperature ?? provider.temperature ?? 0),
         maxTokens: Number(item.maxTokens ?? provider.maxTokens ?? 512),
         systemPrompt: target.systemPrompt || '{{env.TARGET_SYSTEM_PROMPT}}',
@@ -1969,6 +1970,56 @@ async function callOpenAICompatible({ baseUrl, model, apiKey, systemPrompt, prom
   };
 }
 
+const DEFAULT_AZURE_API_VERSION = '2024-06-01';
+
+function buildAzureChatUrl(baseUrl, deployment, apiVersion) {
+  const trimmed = String(baseUrl || '').replace(/\/$/, '');
+  // Tolerate either the bare resource root or a full .../openai/deployments/<name> URL.
+  const root = trimmed.replace(/\/openai\/deployments\/.*$/i, '');
+  return `${root}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion || DEFAULT_AZURE_API_VERSION)}`;
+}
+
+async function callAzureOpenAI({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens, apiVersion }) {
+  if (!baseUrl) {
+    throw new Error('Azure OpenAI resource base URL is required (e.g. https://{resource}.openai.azure.com)');
+  }
+  if (!model) {
+    throw new Error('Azure OpenAI deployment name is required (use the Model field)');
+  }
+  const response = await fetch(buildAzureChatUrl(baseUrl, model, apiVersion), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': apiKey || '',
+    },
+    body: JSON.stringify({
+      messages: [
+        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+        { role: 'user', content: prompt },
+      ],
+      temperature,
+      max_tokens: maxTokens,
+    }),
+  });
+  const bodyText = await response.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    body = { raw: bodyText };
+  }
+  if (!response.ok) {
+    throw new Error(body.error?.message || bodyText || `HTTP ${response.status}`);
+  }
+  const choice = body.choices?.[0] || {};
+  return {
+    output: choice.message?.content ?? choice.text ?? body.output ?? '',
+    tokenUsage: body.usage || null,
+    finishReason: choice.finish_reason || choice.finishReason || null,
+    rawResponse: body,
+  };
+}
+
 async function callAnthropic({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens }) {
   if (!baseUrl) throw new Error('Anthropic base URL is required');
   if (!model) throw new Error('Anthropic model is required');
@@ -2277,6 +2328,8 @@ async function callProviderAdapter(adapter, args) {
   switch (adapter) {
     case 'openai-compatible':
       return callOpenAICompatible(args);
+    case 'azure-openai':
+      return callAzureOpenAI(args);
     case 'anthropic':
       return callAnthropic(args);
     case 'cohere':
@@ -2327,7 +2380,7 @@ async function buildNativePromptfooConfig(target) {
   const config = buildPromptfooConfig(target);
   const env = {};
   const providers = [];
-  const nativeAdapters = new Set(['openai-compatible', 'anthropic', 'cohere', 'gemini', 'http-json', 'cli-provider', 'custom-script']);
+  const nativeAdapters = new Set(['openai-compatible', 'azure-openai', 'anthropic', 'cohere', 'gemini', 'http-json', 'cli-provider', 'custom-script']);
   for (const [index, provider] of (config.providers || []).entries()) {
     if (!nativeAdapters.has(provider.id)) {
       throw new Error(`Native engine mode does not yet support the ${provider.id} adapter`);
@@ -2347,6 +2400,7 @@ async function buildNativePromptfooConfig(target) {
         temperature: providerConfig.temperature,
         maxTokens: providerConfig.maxTokens,
         systemPrompt: providerConfig.systemPrompt,
+        apiVersion: providerConfig.apiVersion,
       },
     });
   }
@@ -2561,6 +2615,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
             prompt: task.prompt,
             temperature: Number(runOptions.temperatureOverride ?? task.providerConfig.temperature ?? 0),
             maxTokens: Number(runOptions.maxTokensOverride ?? task.providerConfig.maxTokens ?? 512),
+            apiVersion: task.providerConfig.apiVersion,
           }),
           runOptions.timeoutMs,
           `${task.provider.label || task.provider.id} call`,
@@ -2691,6 +2746,7 @@ async function callProviderFromConfig(target, provider, prompt, runOptions = {})
     prompt,
     temperature: Number(runOptions.temperatureOverride ?? providerConfig.temperature ?? 0),
     maxTokens: Number(runOptions.maxTokensOverride ?? providerConfig.maxTokens ?? 512),
+    apiVersion: providerConfig.apiVersion,
   });
 }
 

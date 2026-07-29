@@ -114,6 +114,7 @@ export interface EvalStageConfigPayload {
     apiKeyEnv?: string;
     apiKeySecretId?: string;
     apiKeyMasked?: string;
+    apiVersion?: string;
     temperature: number;
     maxTokens: number;
   }>;

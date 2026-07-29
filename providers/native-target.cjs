@@ -61,6 +61,8 @@ module.exports = class NativeTargetProvider {
       switch (adapter) {
         case 'openai-compatible':
           return await this.callOpenAICompatible(prompt);
+        case 'azure-openai':
+          return await this.callAzureOpenAI(prompt);
         case 'anthropic':
           return await this.callAnthropic(prompt);
         case 'cohere':
@@ -91,6 +93,10 @@ module.exports = class NativeTargetProvider {
 
   apiKey() {
     return this.config.apiKey || process.env.TARGET_API_KEY || '';
+  }
+
+  apiVersion() {
+    return this.config.apiVersion || '2024-06-01';
   }
 
   systemPrompt() {
@@ -236,6 +242,34 @@ module.exports = class NativeTargetProvider {
       },
       body: JSON.stringify({
         model,
+        messages: this.messages(prompt),
+        temperature: this.config.temperature ?? 0,
+        max_tokens: this.config.maxTokens ?? 512,
+      }),
+    });
+    const bodyText = await response.text();
+    const body = parseBody(bodyText);
+    if (!response.ok) return { error: body.error?.message || bodyText || `HTTP ${response.status}` };
+    return {
+      output: body.choices?.[0]?.message?.content ?? body.choices?.[0]?.text ?? body.output ?? '',
+      tokenUsage: body.usage,
+    };
+  }
+
+  async callAzureOpenAI(prompt) {
+    const baseUrl = this.baseUrl();
+    const deployment = this.model();
+    if (!baseUrl) return { error: 'Azure OpenAI resource base URL is required' };
+    if (!deployment) return { error: 'Azure OpenAI deployment name is required (use the Model field)' };
+    const root = baseUrl.replace(/\/openai\/deployments\/.*$/i, '');
+    const url = `${root}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(this.apiVersion())}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': this.apiKey() || '',
+      },
+      body: JSON.stringify({
         messages: this.messages(prompt),
         temperature: this.config.temperature ?? 0,
         max_tokens: this.config.maxTokens ?? 512,

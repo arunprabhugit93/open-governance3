@@ -1307,6 +1307,17 @@ function EvalWorkspace({
                 <label>Base URL</label>
                 <input value={provider.baseUrl} onChange={(event) => updateProvider(index, { baseUrl: event.target.value })} />
               </div>
+              {provider.providerKey === 'azure-openai' ? (
+                <div className="field">
+                  <label>API version</label>
+                  <input
+                    value={provider.apiVersion || ''}
+                    placeholder="2024-06-01"
+                    onChange={(event) => updateProvider(index, { apiVersion: event.target.value })}
+                  />
+                  <p className="field-help">Model should be the deployment name, not the base model name.</p>
+                </div>
+              ) : null}
               <div className="field">
                 <label>API key</label>
                 <input

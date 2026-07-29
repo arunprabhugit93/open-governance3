@@ -71,7 +71,7 @@ const PROVIDER_GROUPS = [
     key: 'specialized',
     label: 'Specialized providers',
     providers: [
-      ['huggingface-inference', 'Hugging Face Inference Providers', 'https://api-inference.huggingface.co'],
+      ['huggingface-inference', 'Hugging Face Inference Providers', 'https://router.huggingface.co/v1'],
       ['replicate', 'Replicate', 'https://api.replicate.com/v1'],
       ['fal', 'fal.ai', 'https://fal.run'],
       ['voyage', 'Voyage AI', 'https://api.voyageai.com/v1'],
@@ -89,6 +89,7 @@ const PROVIDER_GROUPS = [
 const ADAPTER_BY_PROVIDER = {
   anthropic: 'anthropic',
   cohere: 'cohere',
+  'azure-openai': 'azure-openai',
   'google-gemini': 'gemini',
   'http-json': 'http-json',
   'rest-chat': 'http-json',
@@ -101,7 +102,6 @@ const ADAPTER_BY_PROVIDER = {
 
 const OPENAI_COMPATIBLE_KEYS = new Set([
   'openai',
-  'azure-openai',
   'groq',
   'openrouter',
   'together',
@@ -129,6 +129,8 @@ const OPENAI_COMPATIBLE_KEYS = new Set([
   'xai',
   'moonshot',
   'deepseek',
+  'huggingface-inference',
+  'ai21',
 ]);
 
 function adapterForProvider(key) {
