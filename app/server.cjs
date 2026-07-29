@@ -3037,11 +3037,117 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
   };
 }
 
+const SECRET_SCAN_PATTERNS = [
+  { name: 'AWS Access Key', pattern: /AKIA[0-9A-Z]{16}/ },
+  { name: 'AWS Secret Key', pattern: /aws_secret_access_key\s*[:=]\s*['"][A-Za-z0-9/+=]{40}['"]/i },
+  { name: 'Generic API/secret key', pattern: /(api[_-]?key|secret[_-]?key|access[_-]?token)['"]?\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]/i },
+  { name: 'Private key header', pattern: /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
+  { name: 'Slack token', pattern: /xox[baprs]-[A-Za-z0-9-]{10,}/ },
+  { name: 'GitHub token', pattern: /gh[pousr]_[A-Za-z0-9]{20,}/ },
+];
+
+// Pickle-based formats execute arbitrary code on load — the actual mechanism behind most
+// real "malicious model" incidents. safetensors/onnx/gguf/ggml cannot.
+const UNSAFE_MODEL_EXTENSIONS = new Set(['.pkl', '.pickle', '.pt', '.pth', '.ckpt', '.h5', '.joblib']);
+const SAFE_MODEL_EXTENSIONS = new Set(['.safetensors', '.onnx', '.gguf', '.ggml', '.tflite']);
+const AUDIT_SCAN_SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__']);
+const AUDIT_SCAN_MAX_FILES = 300;
+const AUDIT_SCAN_MAX_FILE_BYTES = 4 * 1024 * 1024;
+
+function resolveLocalArtifactPath(artifactPath) {
+  const raw = String(artifactPath || '').trim();
+  if (!raw || /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return null; // skip URLs (http://, s3://, etc.)
+  const resolved = path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+  try {
+    return fs.existsSync(resolved) ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+function walkArtifactFiles(rootPath, visit) {
+  const stat = fs.statSync(rootPath);
+  if (!stat.isDirectory()) {
+    visit(rootPath, stat);
+    return;
+  }
+  let visited = 0;
+  (function walk(dir) {
+    if (visited >= AUDIT_SCAN_MAX_FILES) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (visited >= AUDIT_SCAN_MAX_FILES) return;
+      if (AUDIT_SCAN_SKIP_DIRS.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        visited += 1;
+        try {
+          visit(full, fs.statSync(full));
+        } catch {
+          /* unreadable file, skip */
+        }
+      }
+    }
+  })(rootPath);
+}
+
+function scanArtifactForSecrets(rootPath) {
+  const findings = [];
+  let filesScanned = 0;
+  walkArtifactFiles(rootPath, (filePath, stat) => {
+    if (stat.size > AUDIT_SCAN_MAX_FILE_BYTES) return;
+    filesScanned += 1;
+    let content;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      return; // binary or unreadable — not scannable as text
+    }
+    for (const { name, pattern } of SECRET_SCAN_PATTERNS) {
+      if (pattern.test(content)) {
+        findings.push({ file: path.relative(rootPath, filePath) || path.basename(filePath), rule: name });
+      }
+    }
+  });
+  return { findings, filesScanned };
+}
+
+function scanArtifactForUnsafeSerialization(rootPath) {
+  const flagged = [];
+  const safe = [];
+  walkArtifactFiles(rootPath, (filePath) => {
+    const ext = path.extname(filePath).toLowerCase();
+    const relative = path.relative(rootPath, filePath) || path.basename(filePath);
+    if (UNSAFE_MODEL_EXTENSIONS.has(ext)) flagged.push(relative);
+    else if (SAFE_MODEL_EXTENSIONS.has(ext)) safe.push(relative);
+  });
+  return { flagged, safe };
+}
+
+function findArtifactFile(rootPath, namePattern) {
+  let match = null;
+  walkArtifactFiles(rootPath, (filePath) => {
+    if (!match && namePattern.test(path.basename(filePath))) {
+      match = path.relative(rootPath, filePath) || path.basename(filePath);
+    }
+  });
+  return match;
+}
+
 function executeModelAuditRun(target) {
   const metadata = target.metadata || {};
   const audit = metadata.audit || {};
   const provider = metadata.provider || {};
   const runtime = metadata.runtime || {};
+  const artifactRoot = resolveLocalArtifactPath(audit.artifactPath);
+
   const checks = [
     {
       key: 'metadata-completeness',
@@ -3062,12 +3168,6 @@ function executeModelAuditRun(target) {
       detail: audit.licensePolicy || 'License policy is missing.',
     },
     {
-      key: 'sbom',
-      label: 'SBOM/MBOM',
-      pass: audit.sbomRequired === true,
-      detail: audit.sbomRequired ? 'SBOM/MBOM required.' : 'SBOM/MBOM requirement is not enabled.',
-    },
-    {
       key: 'runtime-boundary',
       label: 'Runtime boundary',
       pass: Boolean(provider.baseUrl || target.endpointUrl),
@@ -3080,6 +3180,68 @@ function executeModelAuditRun(target) {
       detail: runtime.dataClassification || 'Data classification is missing.',
     },
   ];
+
+  if (artifactRoot) {
+    try {
+      const { findings, filesScanned } = scanArtifactForSecrets(artifactRoot);
+      checks.push({
+        key: 'secret-exposure',
+        label: 'Secret exposure (local scan)',
+        pass: findings.length === 0,
+        detail: findings.length
+          ? `Found ${findings.length} possible secret(s): ${findings.slice(0, 5).map((f) => `${f.rule} in ${f.file}`).join('; ')}`
+          : `Scanned ${filesScanned} file(s) under ${audit.artifactPath}, no secret patterns found.`,
+      });
+    } catch (error) {
+      checks.push({ key: 'secret-exposure', label: 'Secret exposure (local scan)', pass: false, detail: `Scan failed: ${error.message}` });
+    }
+
+    try {
+      const { flagged, safe } = scanArtifactForUnsafeSerialization(artifactRoot);
+      checks.push({
+        key: 'unsafe-code',
+        label: 'Unsafe code / serialization format',
+        pass: flagged.length === 0,
+        detail: flagged.length
+          ? `${flagged.length} file(s) use pickle-based formats that can execute arbitrary code on load: ${flagged.slice(0, 5).join(', ')}`
+          : safe.length
+            ? `${safe.length} model file(s) use safe serialization formats (safetensors/onnx/gguf/ggml).`
+            : 'No recognized model weight files found under this path to classify.',
+      });
+    } catch (error) {
+      checks.push({ key: 'unsafe-code', label: 'Unsafe code / serialization format', pass: false, detail: `Scan failed: ${error.message}` });
+    }
+
+    const sbomFile = findArtifactFile(artifactRoot, /sbom|cyclonedx|spdx/i);
+    checks.push({
+      key: 'sbom',
+      label: 'SBOM/MBOM',
+      pass: audit.sbomRequired ? Boolean(sbomFile) : true,
+      detail: sbomFile
+        ? `Found ${sbomFile}.`
+        : audit.sbomRequired
+          ? 'SBOM/MBOM required but no SBOM/CycloneDX/SPDX file was found alongside the artifact.'
+          : 'SBOM/MBOM not required for this artifact.',
+    });
+
+    const modelCard = findArtifactFile(artifactRoot, /model.?card|readme/i);
+    checks.push({
+      key: 'model-card',
+      label: 'Model card',
+      pass: Boolean(modelCard),
+      detail: modelCard ? `Found ${modelCard}.` : 'No model card / README found alongside the artifact.',
+    });
+  } else {
+    checks.push({
+      key: 'sbom',
+      label: 'SBOM/MBOM',
+      pass: audit.sbomRequired === true,
+      detail: audit.sbomRequired
+        ? 'SBOM/MBOM required (metadata only — artifact path is not a readable local file/directory, so no SBOM file could actually be verified).'
+        : 'SBOM/MBOM requirement is not enabled.',
+    });
+  }
+
   const selectedScanners = asArray(audit.scanners);
   for (const scanner of selectedScanners) {
     if (!checks.some((check) => check.key === scanner)) {
@@ -3087,7 +3249,9 @@ function executeModelAuditRun(target) {
         key: scanner,
         label: scanner,
         pass: true,
-        detail: 'Scanner selected for downstream evidence collection.',
+        detail: artifactRoot
+          ? 'No dedicated local scanner implemented for this check yet — recorded for evidence collection only.'
+          : 'Scanner selected, but artifact path is not a readable local file/directory — recorded for evidence collection only.',
       });
     }
   }
