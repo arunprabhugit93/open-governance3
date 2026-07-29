@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   createTarget,
@@ -70,6 +70,36 @@ type View = 'registry' | 'onboard' | 'detail';
 type ExecutableStageKey = 'eval' | 'red_team' | 'model_audit';
 type StageKey = ExecutableStageKey | 'evidence';
 type KeyValueRow = { id: string; name: string; value: string };
+
+const STAGE_KEYS: StageKey[] = ['eval', 'red_team', 'model_audit', 'evidence'];
+
+type Route = { view: View; targetId?: string; stage?: StageKey };
+
+function parseRoute(hash: string): Route {
+  const clean = hash.replace(/^#\/?/, '');
+  const parts = clean.split('/').filter(Boolean);
+  if (parts[0] === 'targets' && parts[1]) {
+    const stage = STAGE_KEYS.includes(parts[2] as StageKey) ? (parts[2] as StageKey) : undefined;
+    return { view: 'detail', targetId: parts[1], stage };
+  }
+  if (parts[0] === 'onboard') return { view: 'onboard' };
+  return { view: 'registry' };
+}
+
+function routeHash(route: Route): string {
+  if (route.view === 'detail' && route.targetId) {
+    return route.stage ? `#/targets/${route.targetId}/${route.stage}` : `#/targets/${route.targetId}`;
+  }
+  if (route.view === 'onboard') return '#/onboard';
+  return '#/registry';
+}
+
+function setRouteHash(route: Route) {
+  const next = routeHash(route);
+  if (window.location.hash !== next) {
+    window.location.hash = next;
+  }
+}
 
 const defaultEmail = 'admin@example.com';
 const defaultPassword = 'admin123';
@@ -2888,6 +2918,7 @@ function TargetDetailPage({
   token,
   providerGroups,
   workflowCatalog,
+  initialStage,
   onBack,
   onRefresh,
   onDeleted,
@@ -2896,12 +2927,20 @@ function TargetDetailPage({
   token: string;
   providerGroups: ProviderCatalogGroup[];
   workflowCatalog: WorkflowCatalogResponse;
+  initialStage?: StageKey;
   onBack: () => void;
   onRefresh: (updated: TargetDetailResponse) => void;
   onDeleted: () => Promise<void>;
 }) {
   const [error, setError] = useState('');
-  const [activeStage, setActiveStage] = useState<StageKey>('eval');
+  const [activeStage, setActiveStage] = useState<StageKey>(initialStage || 'eval');
+  function goToStage(stage: StageKey) {
+    setActiveStage(stage);
+    setRouteHash({ view: 'detail', targetId: detail.target.id, stage });
+  }
+  useEffect(() => {
+    setActiveStage(initialStage || 'eval');
+  }, [initialStage, detail.target.id]);
   const [stageRuns, setStageRuns] = useState<Record<ExecutableStageKey, StageRun[]>>({
     eval: [],
     red_team: [],
@@ -3495,7 +3534,7 @@ function TargetDetailPage({
                 >
                   Prepare {label}
                 </button>
-                <button className="secondary-button" type="button" onClick={() => setActiveStage(key)}>
+                <button className="secondary-button" type="button" onClick={() => goToStage(key)}>
                   Open workspace
                 </button>
               </div>
@@ -3512,7 +3551,7 @@ function TargetDetailPage({
           </div>
           <p className="ready-text">Available</p>
           <div className="stage-actions">
-            <button className="secondary-button" type="button" onClick={() => setActiveStage('evidence')}>
+            <button className="secondary-button" type="button" onClick={() => goToStage('evidence')}>
               Open workspace
             </button>
           </div>
@@ -3616,6 +3655,8 @@ function App() {
   const [detail, setDetail] = useState<TargetDetailResponse | null>(null);
   const [providerGroups, setProviderGroups] = useState<ProviderCatalogGroup[]>([]);
   const [workflowCatalog, setWorkflowCatalog] = useState<WorkflowCatalogResponse>(emptyWorkflowCatalog);
+  const [initialStage, setInitialStage] = useState<StageKey | undefined>(undefined);
+  const routedRef = useRef(false);
 
   async function loadData(activeToken = token) {
     if (!activeToken) return;
@@ -3631,10 +3672,32 @@ function App() {
     setWorkflowCatalog(workflowCatalogPayload);
   }
 
-  async function openDetail(id: string, activeToken = token) {
+  async function openDetail(id: string, stage?: StageKey, activeToken = token) {
     if (!activeToken) return;
-    setDetail(await getTargetDetail(activeToken, id));
-    setView('detail');
+    try {
+      const targetDetail = await getTargetDetail(activeToken, id);
+      setDetail(targetDetail);
+      setInitialStage(stage);
+      setView('detail');
+      setRouteHash({ view: 'detail', targetId: id, stage });
+    } catch (err) {
+      setDetail(null);
+      setView('registry');
+      setRouteHash({ view: 'registry' });
+      setMessage(err instanceof Error ? err.message : 'That target could not be opened.');
+    }
+  }
+
+  function goRegistry() {
+    setDetail(null);
+    setView('registry');
+    setRouteHash({ view: 'registry' });
+  }
+
+  function goOnboard() {
+    setMessage('');
+    setView('onboard');
+    setRouteHash({ view: 'onboard' });
   }
 
   useEffect(() => {
@@ -3648,6 +3711,46 @@ function App() {
     });
   }, [token]);
 
+  // Apply whatever route is in the URL once on load — supports refresh and shared/bookmarked links.
+  useEffect(() => {
+    if (!catalog || routedRef.current) return;
+    routedRef.current = true;
+    const route = parseRoute(window.location.hash);
+    if (route.view === 'detail' && route.targetId) {
+      openDetail(route.targetId, route.stage);
+    } else if (route.view === 'onboard') {
+      setView('onboard');
+    } else {
+      setView('registry');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog]);
+
+  // Keep state in sync with browser back/forward navigation and manual hash edits.
+  useEffect(() => {
+    function handleHashChange() {
+      const route = parseRoute(window.location.hash);
+      if (route.view === 'detail' && route.targetId) {
+        if (detail && detail.target.id === route.targetId) {
+          // Same target, only the stage tab changed (e.g. via goToStage or back/forward
+          // between stages) — avoid an unnecessary refetch.
+          setInitialStage(route.stage);
+        } else {
+          openDetail(route.targetId, route.stage);
+        }
+      } else if (route.view === 'onboard') {
+        setDetail(null);
+        setView('onboard');
+      } else {
+        setDetail(null);
+        setView('registry');
+      }
+    }
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, detail]);
+
   function handleLogin(session: Session) {
     localStorage.setItem('og_token', session.token);
     localStorage.setItem('og_user', JSON.stringify(session.user));
@@ -3655,6 +3758,7 @@ function App() {
     setUser(session.user);
     setLoginError('');
     setView('registry');
+    setRouteHash({ view: 'registry' });
   }
 
   function handleLogout() {
@@ -3666,6 +3770,8 @@ function App() {
     setTargets([]);
     setDetail(null);
     setMessage('');
+    routedRef.current = false;
+    setRouteHash({ view: 'registry' });
   }
 
   async function handleCreated(id: string) {
@@ -3680,7 +3786,7 @@ function App() {
 
   if (!catalog) {
     return (
-      <Shell onRegistry={() => setView('registry')} onLogout={handleLogout}>
+      <Shell onRegistry={goRegistry} onLogout={handleLogout}>
         <section className="panel">
           <p className="muted">Loading registry...</p>
         </section>
@@ -3689,13 +3795,7 @@ function App() {
   }
 
   return (
-    <Shell
-      onRegistry={() => {
-        setView('registry');
-        setDetail(null);
-      }}
-      onLogout={handleLogout}
-    >
+    <Shell onRegistry={goRegistry} onLogout={handleLogout}>
       {view === 'registry' ? (
         <RegistryPage
           catalog={catalog}
@@ -3704,32 +3804,21 @@ function App() {
           token={token}
           onSelect={(id) => openDetail(id)}
           onImported={handleCreated}
-          onOnboard={() => {
-            setMessage('');
-            setView('onboard');
-          }}
+          onOnboard={goOnboard}
         />
       ) : view === 'onboard' ? (
-        <OnboardingPage
-          catalog={catalog}
-          token={token}
-          onCreated={handleCreated}
-          onBack={() => setView('registry')}
-        />
+        <OnboardingPage catalog={catalog} token={token} onCreated={handleCreated} onBack={goRegistry} />
       ) : detail ? (
         <TargetDetailPage
           detail={detail}
           token={token}
           providerGroups={providerGroups}
           workflowCatalog={workflowCatalog}
-          onBack={() => {
-            setDetail(null);
-            setView('registry');
-          }}
+          initialStage={initialStage}
+          onBack={goRegistry}
           onRefresh={(updated) => setDetail(updated)}
           onDeleted={async () => {
-            setDetail(null);
-            setView('registry');
+            goRegistry();
             setMessage('Target deleted.');
             await loadData();
           }}
