@@ -466,7 +466,12 @@ function RegistryPage({
         {targets.length ? (
           <div className="registry-list">
             {targets.map((target) => (
-              <button className="registry-row registry-button" key={target.id} onClick={() => onSelect(target.id)}>
+              <button
+                className="registry-row registry-button"
+                key={target.id}
+                onClick={() => onSelect(target.id)}
+                aria-label={`Open ${target.displayName}`}
+              >
                 <div>
                   <h3>{target.displayName}</h3>
                   <p className="muted">
