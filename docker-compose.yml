@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: open-governance3-postgres
+    environment:
+      POSTGRES_DB: open_governance3
+      POSTGRES_USER: open_governance
+      POSTGRES_PASSWORD: open_governance
+    ports:
+      - "15432:5432"
+    volumes:
+      - open-governance3-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U open_governance -d open_governance3"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  open-governance3-pgdata:
+

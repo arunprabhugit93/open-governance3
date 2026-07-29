@@ -1,0 +1,26 @@
+{
+  "name": "open-governance3",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hostable LLM security testing harness built on Promptfoo.",
+  "type": "commonjs",
+  "scripts": {
+    "app:dev": "node app/server.cjs",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "frontend:dev": "npm run dev --prefix app/frontend",
+    "frontend:build": "npm run build --prefix app/frontend",
+    "frontend:preview": "npm run preview --prefix app/frontend",
+    "eval": "promptfoo eval -c promptfooconfig.yaml",
+    "view": "promptfoo view -p 15500 -n",
+    "redteam:init": "promptfoo redteam init",
+    "redteam": "promptfoo redteam run -c promptfooconfig.yaml",
+    "redteam:report": "promptfoo redteam report"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "pg": "^8.22.0",
+    "promptfoo": "^0.121.19"
+  }
+}

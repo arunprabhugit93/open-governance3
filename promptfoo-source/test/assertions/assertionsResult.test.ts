@@ -1,0 +1,564 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  AssertionsResult,
+  DEFAULT_TOKENS_USED,
+  GUARDRAIL_BLOCKED_REASON,
+} from '../../src/assertions/assertionsResult';
+import { getEnvBool } from '../../src/envars';
+
+import type { AssertionSet, GradingResult } from '../../src/types/index';
+
+vi.mock('../../src/envars');
+
+describe('AssertionsResult', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  describe('noAssertsResult', () => {
+    it('should return default result for no assertions', () => {
+      const result = AssertionsResult.noAssertsResult();
+      expect(result).toEqual({
+        pass: true,
+        score: 1,
+        reason: 'No assertions',
+        tokensUsed: DEFAULT_TOKENS_USED,
+      });
+    });
+  });
+
+  describe('addResult', () => {
+    it('should add result and update totals', () => {
+      const assertionsResult = new AssertionsResult({});
+      const result: GradingResult = {
+        pass: true,
+        score: 0.8,
+        reason: 'Test passed',
+        tokensUsed: {
+          total: 100,
+          prompt: 50,
+          completion: 50,
+          cached: 0,
+        },
+      };
+
+      assertionsResult.addResult({
+        index: 0,
+        result,
+        metric: 'accuracy',
+        weight: 2,
+      });
+
+      expect(assertionsResult['totalScore']).toBe(1.6); // 0.8 * 2
+      expect(assertionsResult['totalWeight']).toBe(2);
+      expect(assertionsResult['tokensUsed']).toEqual({
+        total: 100,
+        prompt: 50,
+        completion: 50,
+        cached: 0,
+        numRequests: 0,
+      });
+      expect(assertionsResult['namedScores']).toEqual({
+        accuracy: 1.6,
+      });
+    });
+
+    it('should handle failed results', () => {
+      const assertionsResult = new AssertionsResult({});
+      const result: GradingResult = {
+        pass: false,
+        score: 0.3,
+        reason: 'Test failed',
+        tokensUsed: DEFAULT_TOKENS_USED,
+      };
+
+      assertionsResult.addResult({
+        index: 0,
+        result,
+      });
+
+      expect(assertionsResult['failedReason']).toBe('Test failed');
+    });
+
+    it('should throw error if short circuit enabled', () => {
+      vi.mocked(getEnvBool).mockReturnValue(true);
+
+      const assertionsResult = new AssertionsResult({});
+      const result: GradingResult = {
+        pass: false,
+        score: 0,
+        reason: 'Critical failure',
+        tokensUsed: DEFAULT_TOKENS_USED,
+      };
+
+      expect(() =>
+        assertionsResult.addResult({
+          index: 0,
+          result,
+        }),
+      ).toThrow('Critical failure');
+    });
+  });
+
+  describe('testResult', () => {
+    it('should calculate final result with threshold', async () => {
+      const assertionsResult = new AssertionsResult({ threshold: 0.7 });
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: true,
+          score: 0.6,
+          reason: 'Test 1',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        weight: 1,
+      });
+
+      assertionsResult.addResult({
+        index: 1,
+        result: {
+          pass: true,
+          score: 0.8,
+          reason: 'Test 2',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        weight: 1,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      expect(result.pass).toBe(true);
+      expect(result.score).toBe(0.7);
+      expect(result.reason).toBe('Aggregate score 0.70 ≥ 0.7 threshold');
+    });
+
+    it('should honor a threshold of 0 as an override (never fail on individual assertion failures)', async () => {
+      const assertionsResult = new AssertionsResult({ threshold: 0 });
+
+      // A failing assertion — under the default all-pass logic this fails the test.
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: false,
+          score: 0,
+          reason: 'Test 1 failed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        weight: 1,
+      });
+
+      // A passing assertion.
+      assertionsResult.addResult({
+        index: 1,
+        result: {
+          pass: true,
+          score: 1,
+          reason: 'Test 2 passed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        weight: 1,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      // Aggregate score 0.5 ≥ 0 → the threshold override passes the test. Before the fix
+      // `if (this.threshold)` was falsy for 0, so the override was skipped and the failing
+      // assertion failed the whole test.
+      expect(result.pass).toBe(true);
+      expect(result.score).toBe(0.5);
+      expect(result.reason).toBe('Aggregate score 0.50 ≥ 0 threshold');
+    });
+
+    it('should pass at the threshold:0 boundary when every assertion fails (aggregate score 0)', async () => {
+      // The override the fix depends on is `0 >= 0`. With every assertion failing the
+      // aggregate score is exactly 0, which must still pass under threshold:0.
+      const assertionsResult = new AssertionsResult({ threshold: 0 });
+      assertionsResult.addResult({
+        index: 0,
+        result: { pass: false, score: 0, reason: 'failed', tokensUsed: DEFAULT_TOKENS_USED },
+        weight: 1,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      expect(result.pass).toBe(true);
+      expect(result.score).toBe(0);
+      expect(result.reason).toBe('Aggregate score 0.00 ≥ 0 threshold');
+    });
+
+    it('should NOT force-pass when the threshold is null (e.g. an empty `threshold:` in YAML)', async () => {
+      // A null/NaN threshold is not a real score requirement. Gating the override on a
+      // numeric threshold keeps `score >= null` (always true) from silently passing every
+      // failing assertion; the default all-pass logic applies instead.
+      const assertionsResult = new AssertionsResult({ threshold: null as unknown as number });
+      assertionsResult.addResult({
+        index: 0,
+        result: { pass: false, score: 0, reason: 'Test failed', tokensUsed: DEFAULT_TOKENS_USED },
+        weight: 1,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      expect(result.pass).toBe(false);
+      expect(result.reason).toBe('Test failed');
+    });
+
+    it('should honor an assert-set threshold of 0 (override + threshold survives in metadata)', async () => {
+      // The assert-set path (index.ts) builds an AssertionsResult with a parentAssertionSet,
+      // and flows through the same numeric-threshold override gate. A threshold of 0
+      // must still engage the override here, and `0` must round-trip into the assert-set metadata
+      // (buildAssertionSetMetadata uses `!== undefined`, not a truthy check).
+      const assertionsResult = new AssertionsResult({
+        threshold: 0,
+        parentAssertionSet: {
+          index: 0,
+          assertionSet: {
+            type: 'assert-set',
+            threshold: 0,
+            assert: [
+              { type: 'equals', value: 'Hello world' },
+              { type: 'contains', value: 'world' },
+            ],
+          } as AssertionSet,
+        },
+      });
+
+      // A failing assertion — under the default all-pass logic this fails the assert-set.
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: false,
+          score: 0,
+          reason: 'equals failed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        weight: 1,
+      });
+      assertionsResult.addResult({
+        index: 1,
+        result: {
+          pass: true,
+          score: 1,
+          reason: 'contains passed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        weight: 1,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      expect(result.pass).toBe(true);
+      expect(result.score).toBe(0.5);
+      expect(result.reason).toBe('Aggregate score 0.50 ≥ 0 threshold');
+      expect(result.metadata?.assertionSet?.threshold).toBe(0);
+    });
+
+    it('should handle scoring function', async () => {
+      const assertionsResult = new AssertionsResult({});
+      const scoringFunction = vi.fn().mockResolvedValue({
+        pass: true,
+        score: 0.9,
+        reason: 'Custom scoring',
+      });
+
+      const result = await assertionsResult.testResult(scoringFunction);
+
+      expect(result.pass).toBe(true);
+      expect(result.score).toBe(0.9);
+      expect(result.reason).toBe('Custom scoring');
+      expect(scoringFunction).toHaveBeenCalledWith(
+        {},
+        {
+          threshold: undefined,
+          parentAssertionSet: undefined,
+          componentResults: [],
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+      );
+    });
+
+    it('should handle scoring function errors', async () => {
+      const assertionsResult = new AssertionsResult({});
+      const scoringFunction = vi.fn().mockRejectedValue(new Error('Scoring failed'));
+
+      const result = await assertionsResult.testResult(scoringFunction);
+
+      expect(result.pass).toBe(false);
+      expect(result.score).toBe(0);
+      expect(result.reason).toBe('Scoring function error: Scoring failed');
+    });
+
+    it('should handle failed content safety checks', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: false,
+          score: 0,
+          reason: 'Failed safety check',
+          assertion: {
+            type: 'guardrails',
+            config: {
+              purpose: 'redteam',
+            },
+          },
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+      });
+
+      const result = await assertionsResult.testResult();
+
+      expect(result.pass).toBe(true);
+      expect(result.reason).toBe(GUARDRAIL_BLOCKED_REASON);
+    });
+  });
+
+  describe('namedScores weight normalization', () => {
+    it('should normalize a shared metric using assertion weights', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: true,
+          score: 1,
+          reason: 'Critical signal passed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'accuracy',
+        weight: 3,
+      });
+
+      assertionsResult.addResult({
+        index: 1,
+        result: {
+          pass: false,
+          score: 0,
+          reason: 'Optional signal failed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'accuracy',
+        weight: 1,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      // accuracy: (1 * 3 + 0 * 1) / (3 + 1) = 0.75
+      expect(result.namedScores!['accuracy']).toBeCloseTo(0.75);
+      expect(result.namedScoreWeights).toEqual({
+        accuracy: 4,
+      });
+    });
+
+    it('should apply different weights to named metrics and normalize correctly', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: true,
+          score: 0.6,
+          reason: 'Test 1',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'relevance',
+        weight: 3,
+      });
+
+      assertionsResult.addResult({
+        index: 1,
+        result: {
+          pass: true,
+          score: 0.9,
+          reason: 'Test 2',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'clarity',
+        weight: 1,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      // relevance: (0.6 * 3) / 3 = 0.6
+      expect(result.namedScores!['relevance']).toBeCloseTo(0.6);
+      // clarity: (0.9 * 1) / 1 = 0.9
+      expect(result.namedScores!['clarity']).toBeCloseTo(0.9);
+      expect(result.namedScoreWeights).toEqual({
+        relevance: 3,
+        clarity: 1,
+      });
+    });
+
+    it('should produce unchanged namedScores when weights are equal', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: true,
+          score: 0.5,
+          reason: 'Test 1',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'accuracy',
+        weight: 2,
+      });
+
+      assertionsResult.addResult({
+        index: 1,
+        result: {
+          pass: true,
+          score: 0.7,
+          reason: 'Test 2',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'accuracy',
+        weight: 2,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      // accuracy: (0.5 * 2 + 0.7 * 2) / (2 + 2) = 2.4 / 4 = 0.6
+      expect(result.namedScores!['accuracy']).toBeCloseTo(0.6);
+      expect(result.namedScoreWeights).toEqual({
+        accuracy: 4,
+      });
+    });
+
+    it('should compute weighted averages for the same metric with unequal weights', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: true,
+          score: 0.4,
+          reason: 'Test 1',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'accuracy',
+        weight: 1,
+      });
+
+      assertionsResult.addResult({
+        index: 1,
+        result: {
+          pass: true,
+          score: 0.8,
+          reason: 'Test 2',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'accuracy',
+        weight: 3,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      // accuracy: (0.4 * 1 + 0.8 * 3) / (1 + 3) = 0.7
+      expect(result.namedScores!['accuracy']).toBeCloseTo(0.7);
+      expect(result.namedScoreWeights).toEqual({
+        accuracy: 4,
+      });
+    });
+
+    it('should handle weight 0 for named metric correctly', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: true,
+          score: 0.8,
+          reason: 'Test 1',
+          tokensUsed: DEFAULT_TOKENS_USED,
+        },
+        metric: 'safety',
+        weight: 0,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      // weight 0: (0.8 * 0) / 0 → 0 (division guarded)
+      expect(result.namedScores!['safety']).toBe(0);
+      expect(result.namedScoreWeights).toEqual({
+        safety: 0,
+      });
+    });
+
+    it('should preserve nested namedScoreWeights when merging child named scores', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: false,
+          score: 0.75,
+          reason: 'Nested assertion set partially failed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+          namedScores: {
+            accuracy: 0.75,
+          },
+          namedScoreWeights: {
+            accuracy: 4,
+          },
+        },
+      });
+
+      const result = await assertionsResult.testResult();
+
+      expect(result.namedScores!['accuracy']).toBeCloseTo(0.75);
+      expect(result.namedScoreWeights).toEqual({
+        accuracy: 4,
+      });
+    });
+
+    it('should scale nested namedScoreWeights by parent assertion weight', async () => {
+      const assertionsResult = new AssertionsResult({});
+
+      assertionsResult.addResult({
+        index: 0,
+        result: {
+          pass: true,
+          score: 0.75,
+          reason: 'Nested assertion set passed',
+          tokensUsed: DEFAULT_TOKENS_USED,
+          namedScores: {
+            accuracy: 0.75,
+          },
+          namedScoreWeights: {
+            accuracy: 4,
+          },
+        },
+        weight: 2,
+      });
+
+      const result = await assertionsResult.testResult();
+
+      expect(result.namedScores!['accuracy']).toBeCloseTo(0.75);
+      expect(result.namedScoreWeights).toEqual({
+        accuracy: 8,
+      });
+    });
+  });
+
+  describe('parentAssertionSet', () => {
+    it('should return parent assertion set', () => {
+      const parentSet = {
+        index: 1,
+        assertionSet: {
+          type: 'assert-set',
+          assert: [
+            {
+              type: 'contains-any',
+            },
+          ],
+        } as AssertionSet,
+      };
+      const assertionsResult = new AssertionsResult({ parentAssertionSet: parentSet });
+
+      expect(assertionsResult.parentAssertionSet).toBe(parentSet);
+    });
+  });
+});

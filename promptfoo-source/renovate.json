@@ -1,0 +1,378 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["local>promptfoo/renovate-config"],
+  "rebaseWhen": "behind-base-branch",
+  "separateMajorMinor": true,
+  "rangeStrategy": "auto",
+  "postUpdateOptions": [],
+  "constraints": {
+    "npm": ">= 11"
+  },
+  "npmrc": "registry=https://registry.npmjs.org/\nengine-strict=true",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 3am on the first day of the month",
+      "before 3am on the 15th day of the month"
+    ]
+  },
+  "ignorePaths": [
+    "examples/**/requirements.txt",
+    "examples/**/pyproject.toml",
+    "examples/**/go.mod",
+    "test/**/go.mod"
+  ],
+  "packageRules": [
+    {
+      "description": "Disable major Node.js version updates",
+      "matchPackageNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Pin the code-scan workflow's Node to 24.15.0: Node >=24.16.0 has a Linux HTTPS slowdown (~10s/request) that drags the scanner's `npm install -g promptfoo` past the job's 15-minute timeout (see the comment in .github/workflows/promptfoo-code-scan.yml; first fixed in PR #9374, regressed by the blanket bump in PR #9859). Renovate must not re-bump this pin. Re-enable when a newer Node resolves the regression.",
+      "matchManagers": ["github-actions"],
+      "matchFileNames": [".github/workflows/promptfoo-code-scan.yml"],
+      "matchPackageNames": ["node"],
+      "enabled": false
+    },
+    {
+      "description": "Group example directory updates as a fallback so package-specific groups still win",
+      "matchFileNames": ["examples/**/package.json"],
+      "groupName": "Example dependencies",
+      "schedule": ["before 6am on the first day of the month"]
+    },
+    {
+      "description": "Group @inquirer packages together",
+      "matchPackagePatterns": ["^@inquirer/"],
+      "groupName": "@inquirer packages"
+    },
+    {
+      "description": "Disable Chevrotain major updates while Node 20 is supported",
+      "matchPackageNames": ["chevrotain", "/^@chevrotain\\//"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Hold tsdown on 0.21.x while Node 20 is supported: tsdown 0.22+ sets engines node ^22.18.0 || >=24.0.0 (drops Node 20.19/20.20), but the repo still builds/tests on Node 20.20 with engine-strict, so 0.22+ aborts npm ci. Revisit when the Node 20 floor is dropped.",
+      "matchPackageNames": ["tsdown"],
+      "allowedVersions": "<0.22.0"
+    },
+    {
+      "description": "Group Anthropic packages together across all dependency types",
+      "matchPackagePatterns": ["^@anthropic-ai/"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "Anthropic packages"
+    },
+    {
+      "description": "Group AWS SDK packages together across all dependency types",
+      "matchPackagePatterns": ["^@aws-sdk/", "^@smithy/"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "AWS SDK packages"
+    },
+    {
+      "description": "Group Azure packages together across all dependency types",
+      "matchPackagePatterns": ["^@azure/"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "Azure packages"
+    },
+    {
+      "description": "Group Storybook monorepo packages together",
+      "matchPackagePatterns": ["^@storybook/", "^storybook$", "^@chromatic-com/storybook"],
+      "groupName": "Storybook monorepo"
+    },
+    {
+      "description": "Group Docusaurus packages together",
+      "matchPackagePatterns": ["^@docusaurus/"],
+      "groupName": "Docusaurus packages"
+    },
+    {
+      "description": "Group GitHub Actions packages together",
+      "matchPackagePatterns": ["^@actions/"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Use major.minor only for Ruby versions to auto-receive patches",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["ruby"],
+      "extractVersion": "^(?<version>\\d+\\.\\d+)",
+      "versioning": "ruby"
+    },
+    {
+      "description": "Group IBM packages together across all dependency types",
+      "matchPackagePatterns": ["^@ibm-cloud/", "^ibm-cloud-sdk-core$"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "IBM packages"
+    },
+    {
+      "description": "Group MUI packages together",
+      "matchPackagePatterns": ["^@mui/", "^@emotion/"],
+      "groupName": "MUI packages"
+    },
+    {
+      "description": "Group Octokit packages together",
+      "matchPackagePatterns": ["^@octokit/"],
+      "groupName": "Octokit"
+    },
+    {
+      "description": "Group OpenAI packages together across all dependency types",
+      "matchPackagePatterns": ["^@openai/", "^openai$"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "OpenAI packages"
+    },
+    {
+      "description": "Group fal.ai packages together across all dependency types",
+      "matchPackagePatterns": ["^@fal-ai/"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "fal.ai packages"
+    },
+    {
+      "description": "Group langfuse packages together across all dependency types",
+      "matchPackagePatterns": ["^langfuse$"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "langfuse"
+    },
+    {
+      "description": "Group PostHog packages together across all dependency types",
+      "matchPackagePatterns": ["^posthog-"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "PostHog packages"
+    },
+    {
+      "description": "Group OpenTelemetry packages together",
+      "matchPackagePatterns": ["^@opentelemetry/"],
+      "groupName": "OpenTelemetry"
+    },
+    {
+      "description": "Group SWC packages together",
+      "matchPackagePatterns": ["^@swc/"],
+      "groupName": "SWC"
+    },
+    {
+      "description": "Group TanStack packages together",
+      "matchPackagePatterns": ["^@tanstack/"],
+      "groupName": "TanStack packages"
+    },
+    {
+      "description": "Group Testing Library packages together",
+      "matchPackagePatterns": ["^@testing-library/"],
+      "groupName": "Testing Library packages"
+    },
+    {
+      "description": "Group Vitest packages together",
+      "matchPackagePatterns": ["^vitest$", "^@vitest/"],
+      "groupName": "Vitest"
+    },
+    {
+      "description": "Keep Drizzle ORM packages in sync",
+      "matchPackageNames": ["drizzle-orm", "drizzle-kit"],
+      "groupName": "Drizzle ORM"
+    },
+    {
+      "description": "Keep Playwright packages in sync across all dependency types",
+      "matchPackagePatterns": ["^@playwright/", "^playwright$", "^playwright-"],
+      "matchDepTypes": [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies"
+      ],
+      "groupName": "Playwright"
+    },
+    {
+      "description": "Keep React packages in sync",
+      "matchPackageNames": ["react", "react-dom", "@types/react", "@types/react-dom"],
+      "groupName": "React"
+    },
+    {
+      "description": "Keep socket.io packages in sync",
+      "matchPackageNames": ["socket.io", "socket.io-client"],
+      "groupName": "socket.io"
+    },
+    {
+      "description": "Keep jsdom in sync across all workspaces",
+      "matchPackageNames": ["jsdom"],
+      "groupName": "jsdom"
+    },
+    {
+      "description": "Keep undici in sync across root and code-scan-action",
+      "matchPackageNames": ["undici"],
+      "groupName": "undici"
+    },
+    {
+      "description": "Keep dedent in sync across all workspaces",
+      "matchPackageNames": ["dedent"],
+      "groupName": "dedent"
+    },
+    {
+      "description": "Group all @types packages together",
+      "matchPackagePatterns": ["^@types/"],
+      "groupName": "Type definitions",
+      "schedule": ["before 6am on Monday"]
+    },
+    {
+      "description": "Keep ModelAudit schema generator pins current",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["scripts/modelaudit_schema_requirements.txt"],
+      "groupName": "ModelAudit schema generator"
+    },
+    {
+      "description": "ModelAudit schema generator: only modelaudit (the top-level package) drives updates. Its transitive pins (pydantic, pydantic-core, and typing helpers) are a matched set that must move together — pydantic enforces an exact pydantic-core pair at import time, and pydantic-core releases ahead of pydantic stable — so an independent bump of any one creates an incompatible pair. They are refreshed by regenerating the schema when modelaudit bumps.",
+      "matchManagers": ["pip_requirements"],
+      "matchFileNames": ["scripts/modelaudit_schema_requirements.txt"],
+      "matchPackageNames": [
+        "pydantic",
+        "pydantic-core",
+        "annotated-types",
+        "typing-extensions",
+        "typing-inspection"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "LLM provider packages: frequent updates with a ten-day stabilization window",
+      "matchPackagePatterns": [
+        "^@anthropic-ai/",
+        "^@aws-sdk/client-bedrock",
+        "^@aws-sdk/client-sagemaker",
+        "^@azure/ai-",
+        "^@azure/openai",
+        "^@fal-ai/",
+        "^@ibm-cloud/watsonx",
+        "^@modelcontextprotocol/",
+        "^@openai/",
+        "^google-auth-library$",
+        "^langfuse$",
+        "^openai$"
+      ],
+      "schedule": ["every weekday"],
+      "rangeStrategy": "bump",
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "All npm packages: wait 10 days, a buffer above the 7-day Socket minimum release age floor",
+      "matchDatasources": ["npm"],
+      "minimumReleaseAge": "10 days"
+    },
+
+    {
+      "description": "@opencode-ai/sdk: weekly updates to reduce noise from daily releases",
+      "matchPackageNames": ["@opencode-ai/sdk"],
+      "schedule": ["before 6am on Monday"],
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "AWS SDK packages: weekly updates to reduce noise",
+      "matchPackagePatterns": ["^@aws-sdk/", "^@smithy/"],
+      "schedule": ["before 6am on Monday"],
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "Biome: weekly updates",
+      "matchPackageNames": ["@biomejs/biome"],
+      "schedule": ["before 6am on Monday"],
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "Dev tooling: weekly updates (low urgency)",
+      "matchPackageNames": ["hono", "knip"],
+      "schedule": ["before 6am on Monday"],
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "framer-motion: monthly updates (animation library, low urgency)",
+      "matchPackageNames": ["framer-motion"],
+      "schedule": ["before 6am on the first day of the month"],
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "satori: monthly updates to reduce noise from frequent patch releases",
+      "matchPackageNames": ["satori"],
+      "schedule": ["before 6am on the first day of the month"],
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "Vercel AI SDK: monthly updates to reduce noise from frequent patch releases",
+      "matchPackageNames": ["ai"],
+      "groupName": "Vercel AI SDK",
+      "schedule": ["before 6am on the first day of the month"],
+      "rangeStrategy": "bump",
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "Storybook: monthly updates to reduce noise from frequent patch releases",
+      "matchPackagePatterns": ["^@storybook/", "^storybook$", "^@chromatic-com/storybook"],
+      "schedule": ["before 6am on the first day of the month"],
+      "rangeStrategy": "bump",
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "PostHog packages: monthly updates to reduce noise from frequent patch releases",
+      "matchPackagePatterns": ["^posthog-"],
+      "schedule": ["before 6am on the first day of the month"],
+      "rangeStrategy": "bump",
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "undici: monthly updates to reduce noise",
+      "matchPackageNames": ["undici"],
+      "schedule": ["before 6am on the first day of the month"],
+      "rangeStrategy": "bump",
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "postcss: monthly updates to reduce noise from frequent patch releases",
+      "matchPackageNames": ["postcss"],
+      "schedule": ["before 6am on the first day of the month"],
+      "rangeStrategy": "bump",
+      "minimumReleaseAge": "10 days"
+    },
+    {
+      "description": "fast-xml-parser: monthly updates to reduce noise from frequent patch releases",
+      "matchPackageNames": ["fast-xml-parser"],
+      "schedule": ["before 6am on the first day of the month"],
+      "rangeStrategy": "bump",
+      "minimumReleaseAge": "10 days"
+    }
+  ]
+}
