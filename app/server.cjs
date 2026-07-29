@@ -892,6 +892,73 @@ function jaccardSimilarity(a, b) {
   return union ? intersection / union : 0;
 }
 
+function cosineSimilarityVec(a, b) {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function dotProductVec(a, b) {
+  let dot = 0;
+  for (let i = 0; i < a.length; i += 1) dot += a[i] * b[i];
+  return dot;
+}
+
+function euclideanSimilarityVec(a, b) {
+  let sumSq = 0;
+  for (let i = 0; i < a.length; i += 1) sumSq += (a[i] - b[i]) ** 2;
+  return 1 / (1 + Math.sqrt(sumSq));
+}
+
+async function callOpenAICompatibleEmbedding({ baseUrl, model, apiKey, input }) {
+  const response = await fetch(`${String(baseUrl).replace(/\/$/, '')}/embeddings`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey || 'local'}`,
+    },
+    body: JSON.stringify({ model, input }),
+  });
+  const bodyText = await response.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    throw new Error(`Embedding endpoint returned a non-JSON response: ${bodyText.slice(0, 200)}`);
+  }
+  if (!response.ok) {
+    throw new Error(body.error?.message || bodyText || `HTTP ${response.status}`);
+  }
+  const vector = body.data?.[0]?.embedding;
+  if (!Array.isArray(vector)) {
+    throw new Error('Embedding response did not include a vector');
+  }
+  return vector;
+}
+
+async function embeddingSimilarity(target, textA, textB, variant) {
+  const judge = judgeConfigForTarget(target);
+  if (!judge || judge.adapter !== 'openai-compatible' || !judge.baseUrl) {
+    throw new Error('No embedding-capable judge provider configured for this target');
+  }
+  const embeddingModel = target?.metadata?.judge?.embeddingModel || 'text-embedding-3-small';
+  const apiKey = await resolveProviderApiKey(target.id, judge);
+  const [vecA, vecB] = await Promise.all([
+    callOpenAICompatibleEmbedding({ baseUrl: judge.baseUrl, model: embeddingModel, apiKey, input: textA }),
+    callOpenAICompatibleEmbedding({ baseUrl: judge.baseUrl, model: embeddingModel, apiKey, input: textB }),
+  ]);
+  if (variant === 'dot') return dotProductVec(vecA, vecB);
+  if (variant === 'euclidean') return euclideanSimilarityVec(vecA, vecB);
+  return cosineSimilarityVec(vecA, vecB);
+}
+
 function ngrams(tokens, size) {
   if (!Array.isArray(tokens) || tokens.length < size) return [];
   return Array.from({ length: tokens.length - size + 1 }, (_item, index) => tokens.slice(index, index + size).join(' '));
@@ -1665,8 +1732,14 @@ async function evaluateAssertion(output, assertion = {}, context = {}) {
     case 'similar': {
       const threshold = assertionThreshold(assertion, 0.5);
       const reference = stripThresholdDirective(expected);
-      const score = jaccardSimilarity(actual, reference);
-      return { pass: score >= threshold, score, threshold, evaluator: 'local-similarity' };
+      const variant = assertionType.includes(':') ? assertionType.split(':')[1] : 'cosine';
+      try {
+        const score = await embeddingSimilarity(context.target, actual, reference, variant);
+        return { pass: score >= threshold, score, threshold, evaluator: 'embedding-similarity', embeddingModel: context.target?.metadata?.judge?.embeddingModel || 'text-embedding-3-small' };
+      } catch (error) {
+        const score = jaccardSimilarity(actual, reference);
+        return { pass: score >= threshold, score, threshold, evaluator: 'local-similarity-approx', approximationReason: error.message };
+      }
     }
     case 'moderation': {
       const expectedState = expected.toLowerCase() || 'safe';

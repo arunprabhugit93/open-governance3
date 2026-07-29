@@ -2935,6 +2935,7 @@ function TargetDetailPage({
     judgeAdapter: targetJudge.adapter || 'openai-compatible',
     judgeBaseUrl: targetJudge.baseUrl || '',
     judgeModel: targetJudge.model || '',
+    judgeEmbeddingModel: targetJudge.embeddingModel || 'text-embedding-3-small',
     judgeApiKey: '',
     judgeTemperature: Number(targetJudge.temperature ?? 0),
     judgeMaxTokens: Number(targetJudge.maxTokens ?? 512),
@@ -2971,6 +2972,7 @@ function TargetDetailPage({
       judgeAdapter: judge.adapter || 'openai-compatible',
       judgeBaseUrl: judge.baseUrl || '',
       judgeModel: judge.model || '',
+      judgeEmbeddingModel: judge.embeddingModel || 'text-embedding-3-small',
       judgeApiKey: '',
       judgeTemperature: Number(judge.temperature ?? 0),
       judgeMaxTokens: Number(judge.maxTokens ?? 512),
@@ -3073,6 +3075,7 @@ function TargetDetailPage({
             adapter: settings.judgeAdapter,
             baseUrl: settings.judgeBaseUrl,
             model: settings.judgeModel,
+            embeddingModel: settings.judgeEmbeddingModel,
             apiKey: settings.judgeApiKey,
             temperature: settings.judgeTemperature,
             maxTokens: settings.judgeMaxTokens,
@@ -3322,6 +3325,19 @@ function TargetDetailPage({
                   value={settings.judgeModel}
                   onChange={(event) => setSettings((current) => ({ ...current, judgeModel: event.target.value }))}
                 />
+              </div>
+              <div className="field">
+                <label htmlFor="settingsJudgeEmbeddingModel">Embedding model (used by "similar" assertions)</label>
+                <input
+                  id="settingsJudgeEmbeddingModel"
+                  value={settings.judgeEmbeddingModel}
+                  placeholder="text-embedding-3-small"
+                  onChange={(event) => setSettings((current) => ({ ...current, judgeEmbeddingModel: event.target.value }))}
+                />
+                <p className="field-help">
+                  Requires an OpenAI-compatible judge base URL that serves /embeddings. Without one, "similar" assertions
+                  fall back to a local word-overlap approximation.
+                </p>
               </div>
               <div className="field">
                 <label htmlFor="settingsJudgeApiKey">Judge API key</label>

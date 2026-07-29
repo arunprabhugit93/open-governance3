@@ -49,6 +49,7 @@ export interface TargetPayload {
       adapter?: string;
       baseUrl?: string;
       model?: string;
+      embeddingModel?: string;
       apiKey?: string;
       apiKeySecretId?: string;
       apiKeyMasked?: string;
