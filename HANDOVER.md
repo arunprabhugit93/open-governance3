@@ -100,12 +100,41 @@ The product is **not a stub/skeleton** — it's a real, working implementation:
    the n-gram metrics (bleu/gleu/rouge/meteor) and model-graded assertions
    were already legitimate local/judge implementations, not placeholders.
 
+## Change log — iteration 2 (routing/UX)
+
+6. Added real hash-based client-side routing (`#/registry`, `#/onboard`,
+   `#/targets/:id`, `#/targets/:id/:stage`) to `app/frontend/src/main.tsx`.
+   Fixes the routing gap noted above: refresh now restores the exact view
+   (including active workspace tab), deep links work, browser back/forward
+   works. Deliberately hash-based (not History API) so the Express static
+   server needs zero changes — no catch-all route required.
+   - Caught and fixed a real bug during manual testing: navigating back to
+     a stage-less URL left the previous stage's workspace panel showing
+     instead of resetting to Eval. Fixed by making the `initialStage`-sync
+     effect in `TargetDetailPage` unconditional instead of guarded on
+     truthiness.
+   - Also fixed: naively refetching the full target on every stage-tab
+     click (because changing `window.location.hash` fires `hashchange`,
+     which the App-level listener also handles) — now only refetches when
+     the URL's target id actually differs from the currently open one.
+   - Verified all of the above live in the browser (screenshots + JS
+     inspection of `window.location.hash` and rendered headings), not just
+     by reading the diff.
+7. Added `aria-label` to registry row buttons (were exposed as unlabeled
+   "button" in the accessibility tree despite visible text content).
+   Committed as `f7af5be` (routing) and `3471615` (a11y), pushed.
+
+`main.tsx` is still one ~3800-line file — splitting it into per-page
+modules is still open and would meaningfully help velocity on future UX
+work, but wasn't done this iteration (routing was higher value and lower
+risk to land first).
+
 ## Task list (see TaskList tool — these IDs are live, not just notes)
 
 - #1 [done] Get product running locally + smoke test
-- #2 [pending] Audit server.cjs/main.tsx for stubs — **partially done above**,
-  main remaining known gap is `moderation` assertion (still local heuristic)
-  and the `adapter-required` provider list above
+- #2 [pending] Audit server.cjs/main.tsx for stubs — the two known
+  placeholder assertions are now fixed (see #4); remaining known gap is the
+  `adapter-required` provider list above
 - #3 [pending] Expand provider adapters (azure-openai, bedrock, vertex, etc.)
 - #4 [done] Assertion engine — `similar*` and `moderation` now real-API-backed
   with graceful fallback
@@ -113,8 +142,8 @@ The product is **not a stub/skeleton** — it's a real, working implementation:
   refusal-vs-non-refusal grading per the manual's own admission)
 - #6 [pending] Model-audit real scanner integration (currently metadata-only
   checks)
-- #7 [pending] UX pass — routing/deep-links is the top known issue; also
-  consider splitting `main.tsx`
+- #7 [in_progress] UX pass — routing/deep-links **done** (see iteration 2
+  above); still open: splitting `main.tsx`, broader flow/copy review
 - #8 [pending] Multi-user/roles, auth hardening beyond single admin login
 - #9 [pending] CI/CD integration screens, webhook/custom-assertion hardening
 
