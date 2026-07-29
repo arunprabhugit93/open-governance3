@@ -129,13 +129,56 @@ modules is still open and would meaningfully help velocity on future UX
 work, but wasn't done this iteration (routing was higher value and lower
 risk to land first).
 
+## Change log — iteration 3 (provider adapters)
+
+8. Found and fixed a real bug while starting task #3: `azure-openai` was
+   already marked `executable: true` in `app/shared/provider-catalog.cjs`
+   (in `OPENAI_COMPATIBLE_KEYS`), but it was silently wrong — the generic
+   `openai-compatible` adapter sends `Authorization: Bearer` with no
+   `api-version` query param, while Azure requires an `api-key` header and
+   `?api-version=`. It would have looked "ready" in the UI and then failed
+   against any real Azure resource. (Earlier in this file I'd claimed
+   azure-openai was `adapter-required` — that was wrong; the real bug was
+   subtler: mislabeled as generically-executable, not marked unexecutable.)
+   Fixed by adding a dedicated `azure-openai` adapter (`callAzureOpenAI` in
+   `app/server.cjs` and `providers/native-target.cjs`), wired through
+   `callProviderAdapter`, both `nativeAdapters` sets, and a new optional
+   "API version" field in the Eval workspace provider row (only shown when
+   provider type is Azure OpenAI; defaults to `2024-06-01` if left blank).
+   Also aliased `huggingface-inference` (updated its default base URL to
+   HF's OpenAI-compatible router, `https://router.huggingface.co/v1`) and
+   `ai21` onto the existing `openai-compatible` adapter — both have real
+   documented OpenAI-compatible chat endpoints, so this is a legitimate
+   alias, not a guess.
+   Verified via `/api/targets/:id/providers/:providerIndex/test` against a
+   fake Azure resource (`fake-resource-xyz.openai.azure.com`): confirmed
+   adapter selection, a real DNS-level network attempt (not a code crash),
+   and that the live Groq provider on the same target still passes
+   afterward (no regression). Could not do a full live-credential Azure
+   test — no Azure resource/key available in this environment. Committed
+   as `89df3e0`, pushed.
+
+Still `adapter-required` / not yet real: vertex-ai, aws-bedrock,
+aws-sagemaker, watsonx, databricks, snowflake-cortex,
+cloudflare-workers-ai, graphql, websocket-chat, browser-chatbot,
+mcp-server, replicate (plain, not replicate-openai), fal, voyage. These
+mostly need provider-specific auth (AWS SigV4, GCP OAuth2 service
+accounts, IBM IAM) or non-chat protocols (GraphQL query construction,
+WebSocket, async prediction polling) — higher risk to get subtly wrong
+without live credentials to test against, so left alone rather than
+guessed at.
+
 ## Task list (see TaskList tool — these IDs are live, not just notes)
 
 - #1 [done] Get product running locally + smoke test
 - #2 [pending] Audit server.cjs/main.tsx for stubs — the two known
   placeholder assertions are now fixed (see #4); remaining known gap is the
   `adapter-required` provider list above
-- #3 [pending] Expand provider adapters (azure-openai, bedrock, vertex, etc.)
+- #3 [in_progress] Expand provider adapters — azure-openai (was mislabeled,
+  now real), huggingface-inference and ai21 (aliased) done; bedrock,
+  vertex, watsonx, databricks, snowflake-cortex, cloudflare-workers-ai,
+  graphql, websocket-chat, browser-chatbot, mcp-server, replicate, fal,
+  voyage still open (see iteration 3 above for why they're harder)
 - #4 [done] Assertion engine — `similar*` and `moderation` now real-API-backed
   with graceful fallback
 - #5 [pending] Red-team plugin/strategy depth (currently generic
