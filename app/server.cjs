@@ -3766,7 +3766,7 @@ app.get('/api/targets/:id', requireAuth, async (req, res) => {
   res.json(payload);
 });
 
-app.post('/api/targets/:id/stages/:stageKey/prepare', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/stages/:stageKey/prepare', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -3800,7 +3800,7 @@ app.post('/api/targets/:id/stages/:stageKey/prepare', requireAuth, async (req, r
   res.json(await fetchTarget(req.params.id));
 });
 
-app.patch('/api/targets/:id/stages/eval/config', requireAuth, async (req, res) => {
+app.patch('/api/targets/:id/stages/eval/config', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -3816,7 +3816,12 @@ app.patch('/api/targets/:id/stages/eval/config', requireAuth, async (req, res) =
       client,
     );
     const evalBody = removeRawSecrets(requestBody);
-    const normalizedTestCases = normalizeDatasetRows(evalBody.testCases || []);
+    // Only replace test cases when the client actually sent the field — otherwise an
+    // omitted field (e.g. a partial PATCH that only touches providers) would silently wipe
+    // every test case, since unlike `providers` this had no fallback to the existing value.
+    const normalizedTestCases = normalizeDatasetRows(
+      evalBody.testCases !== undefined ? evalBody.testCases : (target.metadata || {}).eval?.testCases || [],
+    );
     const metadata = {
       ...(target.metadata || {}),
       eval: {
@@ -3849,7 +3854,7 @@ app.patch('/api/targets/:id/stages/eval/config', requireAuth, async (req, res) =
   res.json(updated);
 });
 
-app.post('/api/targets/:id/stages/eval/import', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/stages/eval/import', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -3925,7 +3930,7 @@ app.get('/api/targets/:id/stages/eval/runs', requireAuth, async (req, res) => {
   res.json({ runs: runs.rows.map(rowToRun) });
 });
 
-app.post('/api/targets/:id/providers/:providerIndex/test', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/providers/:providerIndex/test', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -3962,7 +3967,7 @@ app.post('/api/targets/:id/providers/:providerIndex/test', requireAuth, async (r
   }
 });
 
-app.post('/api/targets/:id/stages/eval/runs', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/stages/eval/runs', requireAuth, requireAdmin, async (req, res) => {
   try {
     res.status(201).json(await executeAndStoreStageRun(req.params.id, 'eval', req.body || {}));
   } catch (error) {
@@ -3970,7 +3975,7 @@ app.post('/api/targets/:id/stages/eval/runs', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/targets/:id/stages/:stageKey/runs/async', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/stages/:stageKey/runs/async', requireAuth, requireAdmin, async (req, res) => {
   try {
     res.status(202).json(await startStageRunAsync(req.params.id, req.params.stageKey, req.body || {}));
   } catch (error) {
@@ -3978,7 +3983,7 @@ app.post('/api/targets/:id/stages/:stageKey/runs/async', requireAuth, async (req
   }
 });
 
-app.patch('/api/targets/:id/stages/:stageKey/config', requireAuth, async (req, res) => {
+app.patch('/api/targets/:id/stages/:stageKey/config', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -4115,7 +4120,7 @@ app.get('/api/targets/:id/stages/red_team/plan', requireAuth, async (req, res) =
   });
 });
 
-app.post('/api/targets/:id/stages/:stageKey/runs', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/stages/:stageKey/runs', requireAuth, requireAdmin, async (req, res) => {
   const { stageKey } = req.params;
   if (!['red_team', 'model_audit'].includes(stageKey)) {
     return res.status(400).json({ error: 'Unsupported executable stage' });
@@ -4141,7 +4146,7 @@ app.get('/api/targets/:id/schedules', requireAuth, async (req, res) => {
   res.json({ schedules: schedules.rows.map(rowToSchedule) });
 });
 
-app.post('/api/targets/:id/schedules', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/schedules', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -4171,7 +4176,7 @@ app.post('/api/targets/:id/schedules', requireAuth, async (req, res) => {
   res.status(201).json({ schedule: rowToSchedule(inserted.rows[0]) });
 });
 
-app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, async (req, res) => {
+app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -4211,7 +4216,7 @@ app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, async (req, res
   res.json({ schedule: rowToSchedule(updated.rows[0]) });
 });
 
-app.delete('/api/targets/:id/schedules/:scheduleId', requireAuth, async (req, res) => {
+app.delete('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, async (req, res) => {
   const deleted = await pool.query(
     'delete from target_schedules where target_id = $1 and id = $2 returning id',
     [req.params.id, req.params.scheduleId],
@@ -4222,7 +4227,7 @@ app.delete('/api/targets/:id/schedules/:scheduleId', requireAuth, async (req, re
   res.status(204).send();
 });
 
-app.post('/api/targets/:id/schedules/:scheduleId/run-now', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/schedules/:scheduleId/run-now', requireAuth, requireAdmin, async (req, res) => {
   const result = await pool.query(
     'select * from target_schedules where target_id = $1 and id = $2',
     [req.params.id, req.params.scheduleId],
@@ -4326,7 +4331,7 @@ app.get('/api/targets/:id/export', requireAuth, async (req, res) => {
   });
 });
 
-app.post('/api/targets/import', requireAuth, async (req, res) => {
+app.post('/api/targets/import', requireAuth, requireAdmin, async (req, res) => {
   const submittedBody = req.body || {};
   let parsedConfigText = {};
   try {
@@ -4556,7 +4561,7 @@ app.get('/api/targets/:id/runs/compare', requireAuth, async (req, res) => {
   });
 });
 
-app.post('/api/targets/:id/runs/:runId/cancel', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/runs/:runId/cancel', requireAuth, requireAdmin, async (req, res) => {
   const current = await pool.query(
     `select * from target_stage_runs
      where target_id = $1 and id = $2`,
@@ -4592,7 +4597,7 @@ app.post('/api/targets/:id/runs/:runId/cancel', requireAuth, async (req, res) =>
   res.json({ run: rowToRun(updated.rows[0]), detail: await fetchTarget(req.params.id) });
 });
 
-app.post('/api/targets/:id/runs/:runId/rerun', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/runs/:runId/rerun', requireAuth, requireAdmin, async (req, res) => {
   const result = await pool.query(
     `select * from target_stage_runs
      where target_id = $1 and id = $2`,
@@ -4621,7 +4626,7 @@ app.post('/api/targets/:id/runs/:runId/rerun', requireAuth, async (req, res) => 
   }
 });
 
-app.delete('/api/targets/:id/runs/:runId', requireAuth, async (req, res) => {
+app.delete('/api/targets/:id/runs/:runId', requireAuth, requireAdmin, async (req, res) => {
   const deleted = await pool.query(
     `delete from target_stage_runs
      where target_id = $1 and id = $2
@@ -4661,7 +4666,7 @@ app.get('/api/targets/:id/datasets', requireAuth, async (req, res) => {
   res.json({ datasets: datasets.rows.map(rowToDataset) });
 });
 
-app.post('/api/targets/:id/datasets', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/datasets', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -4715,7 +4720,7 @@ app.post('/api/targets/:id/datasets', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/targets/:id/datasets/:datasetId/activate', requireAuth, async (req, res) => {
+app.post('/api/targets/:id/datasets/:datasetId/activate', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -4763,7 +4768,7 @@ app.get('/api/targets/:id/report', requireAuth, async (req, res) => {
   res.json(report);
 });
 
-app.post('/api/targets', requireAuth, async (req, res) => {
+app.post('/api/targets', requireAuth, requireAdmin, async (req, res) => {
   const {
     displayName,
     targetType,
@@ -4889,7 +4894,7 @@ app.post('/api/targets', requireAuth, async (req, res) => {
   }
 });
 
-app.patch('/api/targets/:id', requireAuth, async (req, res) => {
+app.patch('/api/targets/:id', requireAuth, requireAdmin, async (req, res) => {
   const payload = await fetchTarget(req.params.id);
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
@@ -5042,7 +5047,7 @@ app.patch('/api/targets/:id', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/targets/:id', requireAuth, async (req, res) => {
+app.delete('/api/targets/:id', requireAuth, requireAdmin, async (req, res) => {
   const deleted = await pool.query('delete from onboarded_targets where id = $1 returning id', [req.params.id]);
   if (!deleted.rows.length) {
     return res.status(404).json({ error: 'Target not found' });
