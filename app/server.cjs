@@ -196,11 +196,19 @@ function verifyToken(token) {
     return null;
   }
   const [encoded, sig] = token.split('.');
-  const expected = crypto.createHmac('sha256', tokenSecret).update(encoded).digest('base64url');
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+  if (!encoded || !sig) {
     return null;
   }
   try {
+    const expected = crypto.createHmac('sha256', tokenSecret).update(encoded).digest('base64url');
+    const sigBuffer = Buffer.from(sig);
+    const expectedBuffer = Buffer.from(expected);
+    // timingSafeEqual throws (rather than returning false) on mismatched lengths, which a
+    // malformed or truncated Authorization header can easily trigger — guard explicitly so
+    // an invalid token gets a clean 401 instead of a 500 with a stack trace in the response.
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+      return null;
+    }
     const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
     if (payload.exp && Date.now() > payload.exp) {
       return null;
@@ -4908,6 +4916,17 @@ app.delete('/api/targets/:id', requireAuth, async (req, res) => {
 
 app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(staticPath, 'index.html'));
+});
+
+// Last-resort handler: never let a stack trace or file path reach a client. Every other
+// route in this app already returns JSON errors deliberately; this covers anything that
+// throws or rejects without one (Express 5 forwards rejected async handlers here too).
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled request error:', err);
+  if (res.headersSent) {
+    return;
+  }
+  res.status(err.status || err.statusCode || 500).json({ error: 'Internal server error' });
 });
 
 migrate()
