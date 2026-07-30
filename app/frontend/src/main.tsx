@@ -3842,8 +3842,8 @@ function UsersPage({ token, currentUserId }: { token: string; currentUserId?: st
         <p className="muted">Manage who can sign in. Admins have full access; viewers can browse but not change settings.</p>
       </section>
 
-      {error ? <div className="banner error">{error}</div> : null}
-      {message ? <div className="banner">{message}</div> : null}
+      {error ? <div className="error">{error}</div> : null}
+      {message ? <div className="success">{message}</div> : null}
 
       <section className="panel">
         <h2>Add a user</h2>
@@ -3993,8 +3993,8 @@ function TokensPage({ token, apiBaseUrl }: { token: string; apiBaseUrl: string }
         </p>
       </section>
 
-      {error ? <div className="banner error">{error}</div> : null}
-      {message ? <div className="banner">{message}</div> : null}
+      {error ? <div className="error">{error}</div> : null}
+      {message ? <div className="success">{message}</div> : null}
 
       {revealedToken ? (
         <section className="panel">
