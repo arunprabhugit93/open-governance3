@@ -1141,3 +1141,49 @@ smaller cosmetic changes for their own sake.
       the judge secret survives untouched since it's still referenced
       in the full metadata the sweep sees — the exact case the
       full-metadata design was meant to protect against.
+
+## Change log — iteration 23 ("Rerun failures" didn't actually scope execution)
+
+37. Same pattern as the model-audit findings gap (iteration 19): a
+    feature that looked complete because the plumbing existed, but the
+    plumbing was never actually wired to the thing it claimed to do.
+    The Evidence workspace's "Rerun" button + "Rerun mode" dropdown
+    (Failures / Errors / All) computed exactly which rows matched via
+    `matchingRowsForRerun`, then threw the result away — it only
+    passed `rerunCandidateRows: matches.length` (a count) into
+    `runOptions`, and nothing downstream ever read `rerunOf`,
+    `rerunMode`, or `rerunCandidateRows` to actually narrow execution.
+    Clicking "Rerun failures" on a run with 3 failures out of 50 cases
+    silently re-ran **all 50**, wasting API calls/cost and — worse —
+    the resulting new run wasn't even scoped to what the user asked to
+    retry, defeating the entire point of the feature.
+    - Added `rerunRowKey(row)` (`"${provider}::${test}"`) and
+      `shouldIncludeInRerun(runOptions, key)` — a no-op passthrough
+      unless `runOptions.rerunKeys` is a non-empty array, in which
+      case it filters to just those keys.
+    - The rerun route now computes `rerunKeys: matches.map
+      (rerunRowKey)` and passes it through — but only for `failures`/
+      `errors` mode; `mode: 'all'` deliberately omits it so a full
+      rerun can't be silently narrowed by a stale key list if the
+      target's config changed since the source run.
+    - Wired the actual filter into both places test/case lists get
+      built: `executeEvalRun`'s task-construction loop (skips a
+      `test` whose `${provider.label}::${test.description}` isn't in
+      the requested set) and `executeRedTeamRun` (filters `cases` by
+      `${providerLabel}::${caseItem.name || plugin/strategy}` before
+      execution starts, not after). Deliberately left `model_audit`
+      alone — its "test cases" are a fixed set of policy/scanner
+      checks derived from the target's own metadata, not an
+      independently-selectable list, so "rerun just the failures"
+      doesn't have a meaningful narrower scope to fall back to there.
+    - Verified live end-to-end, carefully: ran a real red-team stage
+      (5 cases, all genuinely passed against the live Groq target),
+      then deliberately forced 3 of those 5 rows to `pass: false` via
+      direct SQL against the stored run (to get a controlled test
+      fixture without needing to coax a real model failure), and
+      called rerun with `mode: failures` — the new run correctly
+      contained **exactly those 3** cases, not all 5. Confirmed
+      `mode: all` on the same source run still correctly re-executes
+      all 5. Repeated a smaller version of the same check against an
+      eval-stage run. Cleaned up every test run created during this
+      verification before finishing.

@@ -575,6 +575,20 @@ function matchingRowsForRerun(run, mode) {
   return rows;
 }
 
+function rerunRowKey(row) {
+  return `${row.provider || ''}::${row.test || ''}`;
+}
+
+// "Rerun failures/errors" previously computed the matching rows just to report a *count* in
+// runOptions.rerunCandidateRows — nothing ever read that back to actually narrow execution, so
+// clicking "Rerun failures" silently re-ran the *entire* current test/case list instead of just
+// the ones that failed. This is the actual filter: skip building an execution task for any item
+// whose key isn't in the requested set, when a scoped rerun was actually requested.
+function shouldIncludeInRerun(runOptions, key) {
+  if (!Array.isArray(runOptions.rerunKeys) || !runOptions.rerunKeys.length) return true;
+  return runOptions.rerunKeys.includes(key);
+}
+
 function buildRunFindings(run, limit = 10) {
   const rows = run?.results?.rows || [];
   return rows
@@ -3104,6 +3118,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
     const providerConfig = provider.config || {};
     for (const [promptIndex, promptTemplate] of prompts.entries()) {
       for (const [testIndex, test] of tests.entries()) {
+        if (!shouldIncludeInRerun(runOptions, `${provider.label || ''}::${test.description || ''}`)) continue;
         for (let repeatIndex = 0; repeatIndex < repeat; repeatIndex += 1) {
           const vars = test.vars || {};
           const prompt = applyTemplate(promptTemplate, vars);
@@ -3651,7 +3666,11 @@ function assessRedTeamOutput(output, caseItem, target) {
 async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
   const config = buildPromptfooConfig(target);
   const provider = (config.providers || [])[0];
-  const cases = await buildRedTeamCases(target);
+  const allCases = await buildRedTeamCases(target);
+  const providerLabel = provider?.label || target.displayName;
+  const cases = allCases.filter((caseItem) =>
+    shouldIncludeInRerun(runOptions, `${providerLabel}::${caseItem.name || `${caseItem.plugin} / ${caseItem.strategy}`}`),
+  );
   const redteam = target.metadata?.redteam || {};
   const savedRunOptions = redteam.runOptions && typeof redteam.runOptions === 'object' ? redteam.runOptions : {};
   const effectiveRunOptions = { ...savedRunOptions, ...runOptions };
@@ -5504,6 +5523,10 @@ app.post('/api/targets/:id/runs/:runId/rerun', requireAuth, requireAdmin, async 
     const payload = await executeAndStoreStageRun(req.params.id, sourceRun.stageKey, {
       ...(sourceRun.runOptions || {}),
       ...(req.body?.runOptions || {}),
+      // Actually scopes execution to just the matched rows (see shouldIncludeInRerun) — mode
+      // 'all' intentionally omits this so a full rerun isn't accidentally narrowed by a stale
+      // key list from before the target's config changed.
+      rerunKeys: mode === 'all' ? undefined : matches.map(rerunRowKey),
       rerunOf: sourceRun.id,
       rerunMode: mode,
       rerunCandidateRows: matches.length,
