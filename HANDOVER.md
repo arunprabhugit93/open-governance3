@@ -937,3 +937,14 @@ for more than one listener before assuming the fix is wrong.)
       runs (1) and `?stageKey=red_team` returns exactly the red-team
       runs (2), matching the real counts rather than whatever
       happened to survive a stage-blind pre-filter cap.
+
+32. Small follow-up caught while re-reading the eval workspace: the
+    "Import test cases" bulk-JSON parser (`parseBulkCases` in
+    `main.tsx`) threads `assertions`/`vars`/`tags`/`metadata` from each
+    pasted item but never picked up `transform` — added in iteration
+    17, after this parser was last touched, so it silently dropped a
+    pasted test case's transform field even though the manual editor,
+    save path, and execution path all handle it correctly. One-line
+    fix: `transform: item.transform || item.options?.transform`,
+    matching the same fallback shape used everywhere else transform is
+    read from an external config.

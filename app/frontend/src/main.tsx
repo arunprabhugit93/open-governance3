@@ -1115,6 +1115,7 @@ function EvalWorkspace({
             vars: item.vars,
             tags: item.tags,
             metadata: item.metadata,
+            transform: item.transform || item.options?.transform,
           })),
         );
         setMessage('Imported JSON test cases.');
