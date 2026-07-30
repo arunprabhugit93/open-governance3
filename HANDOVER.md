@@ -496,3 +496,35 @@ Login: `admin@example.com` / `admin123`. Pick up the next task from
 `TaskList`, prefer lowest pending ID unless something more urgent surfaced.
 Commit + push after each verified, working increment — don't batch huge
 unverified diffs.
+
+## Change log — iteration 11 (closed the redteam grading investigation)
+
+19. Resolved the "not shipped" item from iteration 10. Root cause: real
+    redteam grading needs promptfoo's internal `redteamProviderManager`
+    singleton warmed up, which only happens as a side effect of a prior
+    `pf.redteam.generate()` call in the same process — confirmed by direct
+    testing (the exact same grader on the exact same output went from
+    "needs OPENAI_API_KEY" to fully working once `generate()` ran first).
+    Wired `gradeWithRealGrader` (`pf.redteam.Graders[assertType].getResult()`)
+    in scoped exactly to `caseItem.source === 'generated-live'` probes,
+    since real generation always calls `pf.redteam.generate()` immediately
+    before grading in the same run — the ordering is naturally satisfied,
+    no extra warm-up call needed. Local-template probes keep using this
+    product's own `assessRedTeamOutput` (no warm-up dependency, already
+    well-tested). Falls back to local grading automatically on any failure.
+    Verified live: `grader: "promptfoo-library"` with genuinely detailed,
+    accurate rubric-based reasoning on a real-generated probe against the
+    live Groq target; local-template path still grades with
+    `system-prompt-overlap` as before (no regression); eval and
+    model-audit regression-checked clean afterward. Commit `c032376`.
+
+**Real generation + real grading are now both live for the
+`useRealGeneration` opt-in path.** The promptfoo-library integration
+arc that started in iteration 9 (providers → generation → grading) is
+complete for red team. Remaining open items from earlier iterations:
+real `pf.assertions` for the eval side (similar/moderation still use
+this product's own approximation/real-API-when-configured fallback —
+lower priority now, since that fallback is honestly labeled and already
+works when a judge provider is configured), task #2 (audit for any
+remaining stubs), task #9 (CI/CD screens), and `main.tsx` splitting
+(task #7, still one ~3900-line file).
