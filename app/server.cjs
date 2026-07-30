@@ -15,7 +15,7 @@ const {
   TEST_FLOW_STAGES,
   getTargetType,
 } = require('./shared/catalog.cjs');
-const { PROVIDER_GROUPS, adapterForProvider } = require('./shared/provider-catalog.cjs');
+const { PROVIDER_GROUPS, adapterForProvider, PROMPTFOO_LIBRARY_PROVIDERS } = require('./shared/provider-catalog.cjs');
 const {
   ASSERTION_TYPES,
   REDTEAM_PLUGINS,
@@ -819,6 +819,7 @@ function buildProviderConfig(target) {
         apiKeySecretId: item.apiKeySecretId,
         apiKeyMasked: item.apiKeyMasked,
         apiVersion: item.apiVersion,
+        libraryConfig: item.libraryConfig,
         temperature: Number(item.temperature ?? provider.temperature ?? 0),
         maxTokens: Number(item.maxTokens ?? provider.maxTokens ?? 512),
         systemPrompt: target.systemPrompt || '{{env.TARGET_SYSTEM_PROMPT}}',
@@ -1611,6 +1612,7 @@ async function evaluateModelGradedAssertion(assertionType, output, assertion, co
     prompt: modelGradedPrompt(assertionType, output, assertion, context),
     temperature: judge.temperature,
     maxTokens: judge.maxTokens,
+    providerKey: judge.providerKey,
   });
   return {
     ...parseJudgeResult(result.output, threshold),
@@ -2070,6 +2072,94 @@ async function callAzureOpenAI({ baseUrl, model, apiKey, systemPrompt, prompt, t
   };
 }
 
+let promptfooLibrary = null;
+function loadPromptfooLibrary() {
+  if (!promptfooLibrary) {
+    // eslint-disable-next-line global-require
+    promptfooLibrary = require('promptfoo');
+  }
+  return promptfooLibrary;
+}
+
+// Bridges to the real, vendored `promptfoo` npm package for providers whose actual auth
+// (AWS SigV4, GCP service-account OAuth, IBM IAM, ...) is complex enough that reusing
+// promptfoo's own, already-correct provider code beats reimplementing it by hand.
+async function callViaPromptfooLibrary({ providerKey, model, baseUrl, apiKey, libraryConfig, systemPrompt, prompt, temperature, maxTokens }) {
+  const prefix = PROMPTFOO_LIBRARY_PROVIDERS[providerKey];
+  if (!prefix) {
+    throw new Error(`No promptfoo library provider mapping for "${providerKey}"`);
+  }
+  if (!model) {
+    throw new Error(`Model is required for the ${providerKey} provider`);
+  }
+  const pf = loadPromptfooLibrary();
+  let parsedExtraConfig = {};
+  if (libraryConfig) {
+    try {
+      parsedExtraConfig = typeof libraryConfig === 'string' ? JSON.parse(libraryConfig) : libraryConfig;
+    } catch (error) {
+      throw new Error(`Invalid JSON in provider-specific config: ${error.message}`);
+    }
+  }
+  const providerPath = `${prefix}:${model}`;
+  const config = {
+    apiKey,
+    ...(baseUrl ? { apiBaseUrl: baseUrl } : {}),
+    temperature,
+    max_tokens: maxTokens,
+    ...parsedExtraConfig,
+  };
+  const context = {
+    prompt: { raw: prompt, label: 'prompt' },
+    vars: { prompt },
+  };
+  const messages = [
+    ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+    { role: 'user', content: prompt },
+  ];
+  let provider;
+  let result;
+  try {
+    provider = await pf.loadApiProvider(providerPath, { options: { config } });
+    result = await provider.callApi(systemPrompt ? JSON.stringify(messages) : prompt, context);
+  } catch (error) {
+    // The vendored promptfoo package has a known bundling bug where some of its own
+    // internal error-logging paths (chalk.default.red is not a function) throw before
+    // the real underlying error is ever surfaced — observed on config-validation-adjacent
+    // failure paths for some cloud providers (confirmed on Databricks during testing).
+    // This is a defect in the vendored library's bundled output, not in this product's
+    // own code, and there's no clean way to recover the original error message once that
+    // happens — so translate it into an honest, actionable message instead of leaking the
+    // confusing internal exception.
+    if (/chalk(\.default)?\.\w+ is not a function/.test(error.message || '')) {
+      throw new Error(
+        `The ${providerKey} provider failed, but the vendored Promptfoo library hit an internal ` +
+          'logging bug while trying to report why (a known chalk/ESM bundling issue), so the ' +
+          'specific error detail was lost. Double-check the provider-specific config JSON and ' +
+          'credentials — this almost always means something in that config is wrong (bad ' +
+          'endpoint, missing required field, invalid credentials).',
+      );
+    }
+    throw error;
+  }
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const output = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? '');
+  return {
+    output,
+    tokenUsage: result.tokenUsage
+      ? {
+          prompt_tokens: result.tokenUsage.prompt,
+          completion_tokens: result.tokenUsage.completion,
+          total_tokens: result.tokenUsage.total,
+        }
+      : null,
+    finishReason: result.finishReason || null,
+    rawResponse: result,
+  };
+}
+
 async function callAnthropic({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens }) {
   if (!baseUrl) throw new Error('Anthropic base URL is required');
   if (!model) throw new Error('Anthropic model is required');
@@ -2392,6 +2482,8 @@ async function callProviderAdapter(adapter, args) {
       return callCliProvider(args);
     case 'custom-script':
       return callCustomScriptProvider(args);
+    case 'promptfoo-library':
+      return callViaPromptfooLibrary(args);
     default:
       throw new Error(`Provider adapter "${adapter}" is cataloged but not executable yet`);
   }
@@ -2666,6 +2758,8 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
             temperature: Number(runOptions.temperatureOverride ?? task.providerConfig.temperature ?? 0),
             maxTokens: Number(runOptions.maxTokensOverride ?? task.providerConfig.maxTokens ?? 512),
             apiVersion: task.providerConfig.apiVersion,
+            providerKey: task.providerConfig.providerKey,
+            libraryConfig: task.providerConfig.libraryConfig,
           }),
           runOptions.timeoutMs,
           `${task.provider.label || task.provider.id} call`,
@@ -2797,6 +2891,8 @@ async function callProviderFromConfig(target, provider, prompt, runOptions = {})
     temperature: Number(runOptions.temperatureOverride ?? providerConfig.temperature ?? 0),
     maxTokens: Number(runOptions.maxTokensOverride ?? providerConfig.maxTokens ?? 512),
     apiVersion: providerConfig.apiVersion,
+    providerKey: providerConfig.providerKey,
+    libraryConfig: providerConfig.libraryConfig,
   });
 }
 
@@ -3950,10 +4046,14 @@ app.post('/api/targets/:id/providers/:providerIndex/test', requireAuth, requireA
   const prompt = String(req.body?.prompt || 'Reply with exactly: OK').slice(0, 2000);
   const started = Date.now();
   try {
-    const result = await callProviderFromConfig(payload.target, provider, prompt, {
-      temperatureOverride: 0,
-      maxTokensOverride: Number(req.body?.maxTokens || 32),
-    });
+    const result = await withTimeout(
+      callProviderFromConfig(payload.target, provider, prompt, {
+        temperatureOverride: 0,
+        maxTokensOverride: Number(req.body?.maxTokens || 32),
+      }),
+      30000,
+      `${provider.label || provider.id} connection test`,
+    );
     res.json({
       ok: true,
       provider: provider.label,

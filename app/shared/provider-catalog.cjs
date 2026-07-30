@@ -100,6 +100,28 @@ const ADAPTER_BY_PROVIDER = {
   'custom-script': 'custom-script',
 };
 
+// Providers executed by delegating to the real, vendored `promptfoo` npm package
+// (promptfoo.loadApiProvider) instead of a hand-written HTTP adapter — these are
+// providers whose real auth/request shape (AWS SigV4, GCP service-account OAuth, IBM
+// IAM, etc.) is genuinely complex, so reimplementing them by hand would be slower and
+// more bug-prone than reusing promptfoo's own, already-correct provider code.
+// Value = the provider-path prefix promptfoo's provider registry matches on.
+const PROMPTFOO_LIBRARY_PROVIDERS = {
+  'vertex-ai': 'vertex',
+  'aws-bedrock': 'bedrock',
+  'aws-sagemaker': 'sagemaker',
+  watsonx: 'watsonx',
+  databricks: 'databricks',
+  'snowflake-cortex': 'snowflake',
+  'cloudflare-workers-ai': 'cloudflare-ai',
+  'mcp-server': 'mcp',
+  fal: 'fal',
+  voyage: 'voyage',
+};
+for (const key of Object.keys(PROMPTFOO_LIBRARY_PROVIDERS)) {
+  ADAPTER_BY_PROVIDER[key] = 'promptfoo-library';
+}
+
 const OPENAI_COMPATIBLE_KEYS = new Set([
   'openai',
   'groq',
@@ -155,4 +177,5 @@ function providerObjects() {
 module.exports = {
   PROVIDER_GROUPS: providerObjects(),
   adapterForProvider,
+  PROMPTFOO_LIBRARY_PROVIDERS,
 };

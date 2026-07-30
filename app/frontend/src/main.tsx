@@ -1334,6 +1334,21 @@ function EvalWorkspace({
                   <p className="field-help">Model should be the deployment name, not the base model name.</p>
                 </div>
               ) : null}
+              {provider.engine === 'promptfoo-library' ? (
+                <div className="field span-2">
+                  <label>Provider-specific config (JSON)</label>
+                  <textarea
+                    value={provider.libraryConfig || ''}
+                    placeholder={'{"region":"us-east-1","accessKeyId":"...","secretAccessKey":"..."}'}
+                    onChange={(event) => updateProvider(index, { libraryConfig: event.target.value })}
+                  />
+                  <p className="field-help">
+                    This provider is executed through the vendored Promptfoo library, which needs auth beyond a
+                    single API key (AWS credentials, a GCP service account, IBM project ID, etc). Paste whatever
+                    that provider's Promptfoo config object needs — it's merged in as-is.
+                  </p>
+                </div>
+              ) : null}
               <div className="field">
                 <label>API key</label>
                 <input
