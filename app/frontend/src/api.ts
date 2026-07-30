@@ -154,6 +154,7 @@ export interface RedTeamStageConfigPayload {
   plugins: string[];
   strategies: string[];
   numTests: number;
+  useRealGeneration?: boolean;
   maxCharsPerMessage?: number;
   language?: string[];
   runOptions?: {

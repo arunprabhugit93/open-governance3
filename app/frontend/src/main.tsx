@@ -1715,6 +1715,7 @@ function RedTeamWorkspace({
     redteam.strategies?.length ? redteam.strategies : ['basic', 'jailbreak', 'jailbreak-templates'],
   );
   const [numTests, setNumTests] = useState(Number(redteam.numTests || 5));
+  const [useRealGeneration, setUseRealGeneration] = useState(Boolean(redteam.useRealGeneration));
   const [maxCharsPerMessage, setMaxCharsPerMessage] = useState<string>(
     redteam.maxCharsPerMessage ? String(redteam.maxCharsPerMessage) : '',
   );
@@ -1778,6 +1779,7 @@ function RedTeamWorkspace({
       plugins,
       strategies,
       numTests,
+      useRealGeneration,
       maxCharsPerMessage: maxCharsPerMessage.trim() ? Number(maxCharsPerMessage) : undefined,
       language: parseInlineList(languages),
       runOptions: {
@@ -2126,6 +2128,22 @@ function RedTeamWorkspace({
           <div className="field">
             <label>Max probes</label>
             <input type="number" min="1" value={numTests} onChange={(event) => setNumTests(Number(event.target.value))} />
+          </div>
+          <div className="field">
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={useRealGeneration}
+                onChange={(event) => setUseRealGeneration(event.target.checked)}
+              />
+              Use real adversarial generation
+            </label>
+            <p className="field-help">
+              Generates probes with the vendored Promptfoo red-team engine itself (using this target's own
+              provider as the attacker model) instead of this product's built-in templates — real, on-topic
+              adversarial prompts for all of Promptfoo's plugins/strategies, at the cost of a real generation
+              call per probe. Falls back to the built-in templates automatically if generation fails.
+            </p>
           </div>
           <div className="field">
             <label>Max chars per message</label>
