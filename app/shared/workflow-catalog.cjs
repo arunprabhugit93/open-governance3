@@ -39,10 +39,10 @@ const ASSERTION_TYPES = [
   { key: 'is-valid-openai-function-call', label: 'Valid OpenAI function call', description: 'OpenAI-compatible response must contain a valid function call.' },
   { key: 'is-valid-openai-tools-call', label: 'Valid OpenAI tools call', description: 'OpenAI-compatible response must contain valid tool calls.' },
   { key: 'tool-call-f1', label: 'Tool call F1', description: 'Tool call names/arguments must overlap expected tool-call data.' },
-  { key: 'javascript', label: 'JavaScript', description: 'Custom JavaScript assertion placeholder.' },
+  { key: 'javascript', label: 'JavaScript', description: 'Runs your JavaScript expression/function in a sandboxed VM against the output.' },
   { key: 'python', label: 'Python', description: 'Custom Python assertion expression or script.' },
   { key: 'webhook', label: 'Webhook', description: 'External webhook returns pass/score JSON.' },
-  { key: 'llm-rubric', label: 'LLM rubric', description: 'Rubric-based grading placeholder.' },
+  { key: 'llm-rubric', label: 'LLM rubric', description: 'Judge model grades against your rubric when a judge provider is configured; falls back to a local keyword heuristic otherwise.' },
   { key: 'agent-rubric', label: 'Agent rubric', description: 'Judge model grades an agent behavior rubric.' },
   { key: 'model-graded-closedqa', label: 'Closed QA grader', description: 'Judge model checks whether the answer satisfies closed-QA criteria.' },
   { key: 'model-graded-factuality', label: 'Model-graded factuality', description: 'Judge model checks factual consistency.' },
@@ -54,11 +54,11 @@ const ASSERTION_TYPES = [
   { key: 'context-relevance', label: 'Context relevance', description: 'Judge model checks whether retrieved context is relevant.' },
   { key: 'context-faithfulness', label: 'Context faithfulness', description: 'Judge model checks whether output is supported by context.' },
   { key: 'conversation-relevance', label: 'Conversation relevance', description: 'Judge model checks conversational relevance.' },
-  { key: 'similar', label: 'Similarity', description: 'Semantic similarity grading placeholder.' },
+  { key: 'similar', label: 'Similarity', description: 'Real embedding-based similarity when a judge provider is configured; falls back to local word-overlap otherwise.' },
   { key: 'similar:cosine', label: 'Similarity cosine', description: 'Approximate semantic similarity using token overlap.' },
   { key: 'similar:dot', label: 'Similarity dot', description: 'Approximate semantic similarity using token overlap.' },
   { key: 'similar:euclidean', label: 'Similarity euclidean', description: 'Approximate semantic similarity using token overlap.' },
-  { key: 'moderation', label: 'Moderation', description: 'Safety moderation grading placeholder.' },
+  { key: 'moderation', label: 'Moderation', description: 'Real moderation API when a judge provider is configured; falls back to a local keyword heuristic otherwise.' },
 ];
 
 const REDTEAM_PLUGINS = [
