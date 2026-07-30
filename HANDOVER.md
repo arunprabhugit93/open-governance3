@@ -679,3 +679,46 @@ for more than one listener before assuming the fix is wrong.)
       `buildNativePromptfooConfig` simply doesn't include them yet) — an
       honest, non-broken limitation, not a silent gap. Left as follow-up
       work if native-mode parity for these three is ever needed.
+
+## Change log — iteration 15 (login rate limiting + session revocation, task #8)
+
+24. Closed the last two items on task #8's open list: `/api/auth/login`
+    had no rate limiting at all (unlimited password guesses), and
+    session JWTs had no revocation path (only the new API tokens from
+    iteration 13 could be revoked — a stolen/leaked session JWT stayed
+    valid for its full 12-hour life even after "sign out").
+    - **Rate limiting**: in-memory sliding-window limiter keyed by
+      client IP (`loginRateLimitKey`/`checkLoginRateLimit`/
+      `recordLoginFailure`/`clearLoginAttempts` in `server.cjs`) — 10
+      failed attempts within 15 minutes locks that IP out for 15
+      minutes, returning 429 with `Retry-After`. Explicitly in-memory
+      (a `Map`, not a DB table) since this is a self-hosted
+      single-instance product; documented in a code comment that a
+      multi-instance deployment would need this moved to a shared
+      store. Deliberately keyed by IP only (not IP+email) — simpler and
+      covers the primary threat (one attacker machine brute-forcing),
+      whereas per-email tracking mostly matters against distributed
+      botnets, out of scope for now.
+    - **Session revocation**: `signToken` now stamps every JWT with a
+      random `jti`; a new `revokedTokenIds` in-memory `Set` and
+      `POST /api/auth/logout` (requireAuth) adds the *current* token's
+      `jti` to it; `verifyToken` rejects any token whose `jti` is in the
+      set. No cleanup job needed — revoked entries are only ever
+      superseded by the token's own `exp` check, so the set can only
+      grow as fast as active logouts, not unboundedly. Frontend:
+      `logout()` in `api.ts`, called (best-effort, fire-and-forget) from
+      `handleLogout` in `main.tsx` before the local token/user state is
+      cleared — sign-out feels instant either way since the client-side
+      state clear doesn't wait on the network call.
+    - Verified live: 10 failed logins from one IP correctly 429s on the
+      11th (even the *correct* password gets rejected while locked out,
+      which is intentional — otherwise the endpoint would leak whether
+      a password was actually correct via a different status code
+      during lockout); confirmed via a full server restart (clears the
+      in-memory Map, expected) that this doesn't create a permanent
+      self-lockout risk in dev. Separately verified logout: a token
+      that authenticates a real request (200), gets revoked via
+      `/api/auth/logout` (204), and is then rejected (401) on the exact
+      same request that worked a moment before — then confirmed the
+      normal login → use → sign-out → sign-in cycle still works with no
+      regression, both via curl and through the actual browser UI.

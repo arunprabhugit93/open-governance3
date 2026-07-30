@@ -76,6 +76,53 @@ function verifyPassword(password, stored) {
   }
 }
 
+// In-memory login rate limiting, keyed by client IP. Good enough for a
+// self-hosted, single-instance product; a multi-instance deployment would
+// need this moved to a shared store (Postgres or Redis) to stay effective.
+const loginAttempts = new Map();
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+function loginRateLimitKey(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function checkLoginRateLimit(key) {
+  const entry = loginAttempts.get(key);
+  if (!entry) return { limited: false };
+  const now = Date.now();
+  if (entry.lockedUntil) {
+    if (now < entry.lockedUntil) {
+      return { limited: true, retryAfterMs: entry.lockedUntil - now };
+    }
+    loginAttempts.delete(key);
+    return { limited: false };
+  }
+  if (now - entry.firstAttemptAt > LOGIN_WINDOW_MS) {
+    loginAttempts.delete(key);
+    return { limited: false };
+  }
+  return { limited: false };
+}
+
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || now - entry.firstAttemptAt > LOGIN_WINDOW_MS) {
+    loginAttempts.set(key, { count: 1, firstAttemptAt: now });
+    return;
+  }
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) {
+    entry.lockedUntil = now + LOGIN_LOCKOUT_MS;
+  }
+}
+
+function clearLoginAttempts(key) {
+  loginAttempts.delete(key);
+}
+
 function maskSecret(value) {
   const text = String(value || '');
   if (text.length <= 8) return 'stored secret';
@@ -212,8 +259,16 @@ async function resolveProviderApiKey(targetId, providerConfig) {
   return apiKeyEnv ? process.env[apiKeyEnv] : undefined;
 }
 
+// Session JWTs are stateless by design (no DB round-trip to verify one), which normally
+// means they can't be revoked before they expire. To still support "sign out everywhere" /
+// an admin force-logout without a bigger move to server-stored sessions, every token carries
+// a random `jti` and revoked jtis are tracked here until their token's natural expiry — after
+// that the expiry check alone rejects them, so the set never needs the original token to prune.
+const revokedTokenIds = new Set();
+
 function signToken(payload) {
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const withId = { ...payload, jti: crypto.randomUUID() };
+  const encoded = Buffer.from(JSON.stringify(withId)).toString('base64url');
   const sig = crypto.createHmac('sha256', tokenSecret).update(encoded).digest('base64url');
   return `${encoded}.${sig}`;
 }
@@ -238,6 +293,9 @@ function verifyToken(token) {
     }
     const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
     if (payload.exp && Date.now() > payload.exp) {
+      return null;
+    }
+    if (payload.jti && revokedTokenIds.has(payload.jti)) {
       return null;
     }
     return payload;
@@ -4126,11 +4184,22 @@ app.post('/api/auth/login', async (req, res) => {
   if (!email || !password) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+  const rateLimitKey = loginRateLimitKey(req);
+  const rateStatus = checkLoginRateLimit(rateLimitKey);
+  if (rateStatus.limited) {
+    const retryAfterSec = Math.ceil(rateStatus.retryAfterMs / 1000);
+    res.set('Retry-After', String(retryAfterSec));
+    return res.status(429).json({
+      error: `Too many failed login attempts. Try again in ${Math.ceil(retryAfterSec / 60)} minute(s).`,
+    });
+  }
   const result = await pool.query('select * from app_users where email = $1', [String(email).trim().toLowerCase()]);
   const user = result.rows[0];
   if (!user || !verifyPassword(password, user.password_hash)) {
+    recordLoginFailure(rateLimitKey);
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+  clearLoginAttempts(rateLimitKey);
   const token = signToken({
     sub: user.id,
     email: user.email,
@@ -4138,6 +4207,13 @@ app.post('/api/auth/login', async (req, res) => {
     exp: Date.now() + 1000 * 60 * 60 * 12,
   });
   res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+});
+
+app.post('/api/auth/logout', requireAuth, async (req, res) => {
+  if (req.user?.jti) {
+    revokedTokenIds.add(req.user.jti);
+  }
+  res.status(204).send();
 });
 
 app.get('/api/users', requireAuth, requireAdmin, async (_req, res) => {

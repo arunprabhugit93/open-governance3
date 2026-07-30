@@ -23,6 +23,7 @@ import {
   importEvalStageConfig,
   importTarget,
   login,
+  logout,
   listDatasets,
   listSchedules,
   listStageRuns,
@@ -4216,6 +4217,7 @@ function App() {
   }
 
   function handleLogout() {
+    const activeToken = token;
     localStorage.removeItem('og_token');
     localStorage.removeItem('og_user');
     setToken(null);
@@ -4226,6 +4228,11 @@ function App() {
     setMessage('');
     routedRef.current = false;
     setRouteHash({ view: 'registry' });
+    if (activeToken) {
+      logout(activeToken).catch(() => {
+        // Best-effort — the client-side token is already cleared either way.
+      });
+    }
   }
 
   async function handleCreated(id: string) {
