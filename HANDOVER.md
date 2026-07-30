@@ -1097,3 +1097,47 @@ Continuing the loop per the standing instruction; future iterations
 should keep applying the same standard (verify live against a real
 target, not just code review) rather than settling for smaller and
 smaller cosmetic changes for their own sake.
+
+## Change log — iteration 22 (orphaned provider-secret cleanup)
+
+36. Found a real data-hygiene/security gap while checking key-rotation
+    behavior: removing a provider from a target's eval config, or
+    replacing the whole `providers[]` array via import, never cleaned
+    up that provider's row in `provider_secrets`. `upsertProviderSecret`
+    correctly updates in place when rotating a key *within* the same
+    provider slot (no orphan there), but nothing ever deleted a secret
+    whose provider was removed entirely — the encrypted key just sat
+    in the DB forever, referenced by nothing, silently surviving every
+    future edit. For a security-assurance product that itself stores
+    customer API keys, "we removed that key" quietly not being true at
+    the storage layer is a real problem, not just clutter.
+    - Added `collectReferencedSecretIds(metadata)` — walks all three
+      places a secret id can live in a target's metadata
+      (`eval.providers[].apiKeySecretId`, the legacy single
+      `provider.apiKeySecretId`, `judge.apiKeySecretId`) — and
+      `sweepOrphanedProviderSecrets(client, targetId, metadata)`,
+      which deletes any `provider_secrets` row for that target whose
+      id isn't in that set. Deliberately computes the referenced set
+      from the *full* merged metadata object, not just the section a
+      given route happens to be touching — a route that only edits
+      `eval.providers` must not accidentally sweep away a `judge`
+      secret it never looked at.
+    - Wired into the two routes that can wholesale-replace the
+      providers array (`PATCH .../stages/eval/config` and
+      `POST .../stages/eval/import`) — the only two places an orphan
+      can actually be created. The target-settings route
+      (`PATCH /api/targets/:id`) already only rotates in place via
+      `upsertProviderSecret`'s existing-id path, so it has no
+      orphan-creation path and didn't need the sweep.
+    - Verified live and carefully, on a disposable target (not the
+      E2E reference target holding a real key): created 2 providers
+      with fake keys, confirmed 2 `provider_secrets` rows; removed one
+      provider via PATCH, confirmed exactly 1 row remains (the other
+      correctly deleted) and the surviving provider's key still
+      decrypts and gets used correctly (confirmed via a real failed
+      auth attempt against OpenAI showing the actual fake key content,
+      proving intact decryption, not corruption); separately set a
+      judge key, then PATCHed the eval providers again, and confirmed
+      the judge secret survives untouched since it's still referenced
+      in the full metadata the sweep sees — the exact case the
+      full-metadata design was meant to protect against.

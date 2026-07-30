@@ -244,6 +244,30 @@ async function normalizeProviderSecrets(targetId, providers, client = pool) {
   return normalized;
 }
 
+// A target's encrypted provider keys live in provider_secrets, referenced by id from three
+// separate spots in metadata (eval.providers[], the legacy single `provider`, and `judge`).
+// Removing a provider from the eval config, or rotating a key, never had any cleanup — the
+// old secret row just sat there, encrypted and orphaned, forever. Collecting every id still
+// referenced anywhere in the metadata (not just the one section a given route happens to be
+// updating) before sweeping is what makes this safe to call from any single-section route.
+function collectReferencedSecretIds(metadata) {
+  const ids = new Set();
+  for (const provider of metadata?.eval?.providers || []) {
+    if (provider?.apiKeySecretId) ids.add(provider.apiKeySecretId);
+  }
+  if (metadata?.provider?.apiKeySecretId) ids.add(metadata.provider.apiKeySecretId);
+  if (metadata?.judge?.apiKeySecretId) ids.add(metadata.judge.apiKeySecretId);
+  return ids;
+}
+
+async function sweepOrphanedProviderSecrets(client, targetId, metadata) {
+  const referenced = [...collectReferencedSecretIds(metadata)];
+  await client.query(
+    'delete from provider_secrets where target_id = $1 and not (id = any($2::uuid[]))',
+    [targetId, referenced],
+  );
+}
+
 async function resolveProviderApiKey(targetId, providerConfig) {
   if (providerConfig.apiKeySecretId) {
     const result = await pool.query(
@@ -4645,6 +4669,7 @@ app.patch('/api/targets/:id/stages/eval/config', requireAuth, requireAdmin, asyn
        where id = $2`,
       [metadata, req.params.id],
     );
+    await sweepOrphanedProviderSecrets(client, req.params.id, metadata);
     await client.query('commit');
   } catch (error) {
     await client.query('rollback');
@@ -4710,6 +4735,7 @@ app.post('/api/targets/:id/stages/eval/import', requireAuth, requireAdmin, async
        where id = $2`,
       [metadata, req.params.id],
     );
+    await sweepOrphanedProviderSecrets(client, req.params.id, metadata);
     await client.query('commit');
   } catch (error) {
     await client.query('rollback');
