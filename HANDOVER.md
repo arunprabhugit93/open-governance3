@@ -1020,3 +1020,57 @@ for more than one listener before assuming the fix is wrong.)
       names, and per-stage pass/fail summary; then set `notifyOn:
       failure` and confirmed a passing run correctly sends **no**
       webhook at all (not just an empty one) before cleaning up.
+
+## Change log — iteration 21 (model-audit scanner correctness pass)
+
+35. Re-auditing `executeModelAuditRun` while checking scanner catalog
+    parity turned up three separate, real bugs, all in the same
+    function:
+    - The **SBOM/MBOM check ran unconditionally** whenever an artifact
+      path was set, completely ignoring whether the user had actually
+      selected it in the scanner picker — unchecking "SBOM/MBOM" had
+      no effect. Gated it on `selectedScanners.includes('sbom')`,
+      matching the other three local-file scanners.
+    - The SBOM check's "no artifact path to verify against" branch had
+      **inverted pass/fail logic**: `pass: audit.sbomRequired ===
+      true` means a *required* SBOM that couldn't even be checked
+      reported as PASS, and a *not-required* one reported as FAIL —
+      backwards in both directions. Fixed to `pass: !audit.
+      sbomRequired` (trivially passes when not required; a required
+      SBOM that can't be verified now correctly fails instead of
+      silently reading as compliant).
+    - **`secrets`/`unsafe-code`/`model-card` silently fell into the
+      "no scanner implemented" placeholder** whenever the artifact
+      path was unreadable, even though all three have real
+      implementations — the placeholder text ("no dedicated local
+      scanner implemented for this check yet") was actively false for
+      these three in that situation, and worse, it defaulted to
+      `pass: true`. All three now get an explicit, correctly-labeled
+      failing check ("selected, but the artifact path is not a
+      readable local file or directory — nothing was verified")
+      instead of being misdescribed and silently passed.
+    - Separately hardened the true "no scanner exists for this key at
+      all" placeholder (for `malware`/`dependency-risk`/`data-lineage`,
+      which really have no implementation): kept `pass: true` (a false
+      alarm would be worse than a gap here) but changed the label to
+      `"<key> (not evaluated — no scanner implemented)"` so it can't be
+      mistaken for a real green result at a skim, matching how the
+      provider catalog already marks `Replicate (planned)`.
+    - Found while verifying: the E2E reference target's `artifactPath`
+      pointed at a scratch directory from an earlier session that no
+      longer exists on disk — confirmed this was pre-existing test-data
+      staleness (not something broken by this change) by checking the
+      path directly, then rebuilt a small fresh fixture (a text file
+      with an unquoted fake key, a `.pkl` file, a `README.md`, and a
+      minimal SBOM JSON) and pointed the target at it, which is now the
+      target's live config. Verified end to end at both ends of the
+      bug: the stale path now correctly fails all four gated checks
+      with the honest "not a readable path" message instead of
+      silently passing; the fresh fixture correctly passes secrets/
+      model-card/SBOM and correctly fails unsafe-code (real `.pkl`
+      file detected). Also independently confirmed the secrets
+      scanner's "no match" result on the fixture's unquoted fake key
+      was a fixture-formatting artifact of my own test data (the
+      regex requires quoted values, matching common `KEY="value"` env
+      file conventions) rather than a scanner bug — not something to
+      chase further.

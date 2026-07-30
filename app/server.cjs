@@ -3909,82 +3909,114 @@ function executeModelAuditRun(target) {
   ];
 
   const selectedScanners = asArray(audit.scanners);
-  if (artifactRoot && selectedScanners.includes('secrets')) {
-    try {
-      const { findings, filesScanned } = scanArtifactForSecrets(artifactRoot);
-      checks.push({
-        key: 'secrets',
-        label: 'Secret exposure (local scan)',
-        pass: findings.length === 0,
-        detail: findings.length
-          ? `Found ${findings.length} possible secret(s): ${findings.slice(0, 5).map((f) => `${f.rule} in ${f.file}`).join('; ')}`
-          : `Scanned ${filesScanned} file(s) under ${audit.artifactPath}, no secret patterns found.`,
-      });
-    } catch (error) {
-      checks.push({ key: 'secrets', label: 'Secret exposure (local scan)', pass: false, detail: `Scan failed: ${error.message}` });
+  // Each of these three has a real local scanner. If selected but the artifact path isn't a
+  // readable file/directory, that's a misconfiguration worth surfacing as a failing check —
+  // not silently skipped into the generic "no scanner implemented" placeholder below, which
+  // would incorrectly suggest these three don't have real implementations at all.
+  const unreadablePathDetail = (label) =>
+    `${label} is selected, but the artifact path is not a readable local file or directory — nothing was verified.`;
+  if (selectedScanners.includes('secrets')) {
+    if (artifactRoot) {
+      try {
+        const { findings, filesScanned } = scanArtifactForSecrets(artifactRoot);
+        checks.push({
+          key: 'secrets',
+          label: 'Secret exposure (local scan)',
+          pass: findings.length === 0,
+          detail: findings.length
+            ? `Found ${findings.length} possible secret(s): ${findings.slice(0, 5).map((f) => `${f.rule} in ${f.file}`).join('; ')}`
+            : `Scanned ${filesScanned} file(s) under ${audit.artifactPath}, no secret patterns found.`,
+        });
+      } catch (error) {
+        checks.push({ key: 'secrets', label: 'Secret exposure (local scan)', pass: false, detail: `Scan failed: ${error.message}` });
+      }
+    } else {
+      checks.push({ key: 'secrets', label: 'Secret exposure (local scan)', pass: false, detail: unreadablePathDetail('Secret exposure scan') });
     }
   }
 
-  if (artifactRoot && selectedScanners.includes('unsafe-code')) {
-    try {
-      const { flagged, safe } = scanArtifactForUnsafeSerialization(artifactRoot);
-      checks.push({
-        key: 'unsafe-code',
-        label: 'Unsafe code / serialization format',
-        pass: flagged.length === 0,
-        detail: flagged.length
-          ? `${flagged.length} file(s) use pickle-based formats that can execute arbitrary code on load: ${flagged.slice(0, 5).join(', ')}`
-          : safe.length
-            ? `${safe.length} model file(s) use safe serialization formats (safetensors/onnx/gguf/ggml).`
-            : 'No recognized model weight files found under this path to classify.',
-      });
-    } catch (error) {
-      checks.push({ key: 'unsafe-code', label: 'Unsafe code / serialization format', pass: false, detail: `Scan failed: ${error.message}` });
+  if (selectedScanners.includes('unsafe-code')) {
+    if (artifactRoot) {
+      try {
+        const { flagged, safe } = scanArtifactForUnsafeSerialization(artifactRoot);
+        checks.push({
+          key: 'unsafe-code',
+          label: 'Unsafe code / serialization format',
+          pass: flagged.length === 0,
+          detail: flagged.length
+            ? `${flagged.length} file(s) use pickle-based formats that can execute arbitrary code on load: ${flagged.slice(0, 5).join(', ')}`
+            : safe.length
+              ? `${safe.length} model file(s) use safe serialization formats (safetensors/onnx/gguf/ggml).`
+              : 'No recognized model weight files found under this path to classify.',
+        });
+      } catch (error) {
+        checks.push({ key: 'unsafe-code', label: 'Unsafe code / serialization format', pass: false, detail: `Scan failed: ${error.message}` });
+      }
+    } else {
+      checks.push({ key: 'unsafe-code', label: 'Unsafe code / serialization format', pass: false, detail: unreadablePathDetail('Unsafe code / serialization scan') });
     }
   }
 
-  if (artifactRoot && selectedScanners.includes('model-card')) {
-    const modelCard = findArtifactFile(artifactRoot, /model.?card|readme/i);
-    checks.push({
-      key: 'model-card',
-      label: 'Model card',
-      pass: Boolean(modelCard),
-      detail: modelCard ? `Found ${modelCard}.` : 'No model card / README found alongside the artifact.',
-    });
+  if (selectedScanners.includes('model-card')) {
+    if (artifactRoot) {
+      const modelCard = findArtifactFile(artifactRoot, /model.?card|readme/i);
+      checks.push({
+        key: 'model-card',
+        label: 'Model card',
+        pass: Boolean(modelCard),
+        detail: modelCard ? `Found ${modelCard}.` : 'No model card / README found alongside the artifact.',
+      });
+    } else {
+      checks.push({ key: 'model-card', label: 'Model card', pass: false, detail: unreadablePathDetail('Model card check') });
+    }
   }
 
-  if (artifactRoot) {
-    const sbomFile = findArtifactFile(artifactRoot, /sbom|cyclonedx|spdx/i);
-    checks.push({
-      key: 'sbom',
-      label: 'SBOM/MBOM',
-      pass: audit.sbomRequired ? Boolean(sbomFile) : true,
-      detail: sbomFile
-        ? `Found ${sbomFile}.`
-        : audit.sbomRequired
-          ? 'SBOM/MBOM required but no SBOM/CycloneDX/SPDX file was found alongside the artifact.'
-          : 'SBOM/MBOM not required for this artifact.',
-    });
-  } else {
-    checks.push({
-      key: 'sbom',
-      label: 'SBOM/MBOM',
-      pass: audit.sbomRequired === true,
-      detail: audit.sbomRequired
-        ? 'SBOM/MBOM required (metadata only — artifact path is not a readable local file/directory, so no SBOM file could actually be verified).'
-        : 'SBOM/MBOM requirement is not enabled.',
-    });
+  // Gated on selectedScanners like the other three local-file checks above — previously this
+  // ran unconditionally whenever an artifact path was set, so unchecking "SBOM/MBOM" in the
+  // scanner picker had no actual effect on whether the check ran.
+  if (selectedScanners.includes('sbom')) {
+    if (artifactRoot) {
+      const sbomFile = findArtifactFile(artifactRoot, /sbom|cyclonedx|spdx/i);
+      checks.push({
+        key: 'sbom',
+        label: 'SBOM/MBOM',
+        pass: audit.sbomRequired ? Boolean(sbomFile) : true,
+        detail: sbomFile
+          ? `Found ${sbomFile}.`
+          : audit.sbomRequired
+            ? 'SBOM/MBOM required but no SBOM/CycloneDX/SPDX file was found alongside the artifact.'
+            : 'SBOM/MBOM not required for this artifact.',
+      });
+    } else {
+      // Inverted before this fix: `pass: audit.sbomRequired === true` meant a *required* SBOM
+      // that couldn't even be checked (no readable artifact path) reported as PASS, and a
+      // not-required one reported as FAIL — backwards in both directions. Correct behavior:
+      // nothing to verify when not required (trivially passes), but a required SBOM that
+      // can't be verified at all should not silently read as compliant.
+      checks.push({
+        key: 'sbom',
+        label: 'SBOM/MBOM',
+        pass: !audit.sbomRequired,
+        detail: audit.sbomRequired
+          ? 'SBOM/MBOM required, but the artifact path is not a readable local file/directory, so it could not be verified.'
+          : 'SBOM/MBOM requirement is not enabled.',
+      });
+    }
   }
 
   for (const scanner of selectedScanners) {
     if (!checks.some((check) => check.key === scanner)) {
+      // Deliberately not a real pass — no scanner exists for this key yet, so nothing was
+      // actually checked. `pass: true` (rather than false) avoids a false alarm, but the
+      // label makes that unmistakable at a skim rather than looking identical to a real
+      // green result — this is evidence that the check was *requested*, not that it passed.
       checks.push({
         key: scanner,
-        label: scanner,
+        label: `${scanner} (not evaluated — no scanner implemented)`,
         pass: true,
         detail: artifactRoot
-          ? 'No dedicated local scanner implemented for this check yet — recorded for evidence collection only.'
-          : 'Scanner selected, but artifact path is not a readable local file/directory — recorded for evidence collection only.',
+          ? 'No dedicated local scanner implemented for this check yet — recorded for evidence collection only, not a verified pass.'
+          : 'Scanner selected, but artifact path is not a readable local file/directory — recorded for evidence collection only, not a verified pass.',
       });
     }
   }
