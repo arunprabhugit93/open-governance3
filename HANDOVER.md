@@ -457,6 +457,41 @@ If Docker/Postgres was down (check `docker ps -a` for an Exited container
 before assuming data loss — `docker start open-governance3-postgres` first,
 data lives in a named volume and survives container restarts).
 
+## Change log — iteration 10 (catalog expansion + a graders investigation)
+
+17. Expanded the red-team plugin/strategy catalog from 20/10 to 145/37,
+    extracted directly from `promptfoo-source`'s own constants (not
+    hand-transcribed) — see commit `26cc0d1`. Since real generation
+    (iteration 9) already handles any real plugin id, this was the actual
+    remaining bottleneck: the UI only exposed 20 plugins to select from.
+    Kept 4 of this product's pre-existing non-real custom keys (canary,
+    harmful:violence, roleplay, encoded) under a "Legacy (this product)"
+    bucket so existing saved targets don't lose their configuration.
+    Verified live: existing target's old-plugin redteam run still passes
+    (no regression), and a brand-new catalog plugin ("hallucination",
+    unreachable before) generates a real probe via live Groq in ~6.5s.
+18. **Investigated (not shipped) real red-team grading via
+    `pf.redteam.Graders`** — the other "Next" item from iteration 9. It
+    works (verified: real rubric-based grading, correct pass/fail,
+    reasonable `reason` text, using our own Groq provider as judge) for at
+    least one code path, but hit a real snag: `grader.getResult(...)`
+    sometimes throws "API key is not set... OPENAI_API_KEY" **even when a
+    working `provider` argument is passed** — reproduced with the *same*
+    grader on two different outputs (a refusing response worked with only
+    the passed-in Groq provider; a non-refusing response demanded
+    OPENAI_API_KEY instead). Hypothesis: a refusal pre-check short-circuits
+    without needing the LLM judge, but the full rubric-grading path uses a
+    separate, not-yet-understood default-provider resolution (possibly a
+    `redteamProviderManager`-style singleton that `pf.redteam.generate()`
+    populates as a side effect, which a standalone `getResult()` call never
+    triggers). **Do not ship this integration until that's understood** —
+    better to keep this product's own working plugin-specific graders
+    (`assessRedTeamOutput`) for real-generated probes than ship grading
+    that silently needs OpenAI credentials on some paths and not others.
+    Next step if resumed: try calling `pf.redteam.generate()` first (even
+    with 0 tests) to see if it establishes whatever provider context
+    `getResult()` is missing, before attempting `getResult()` standalone.
+
 Login: `admin@example.com` / `admin123`. Pick up the next task from
 `TaskList`, prefer lowest pending ID unless something more urgent surfaced.
 Commit + push after each verified, working increment — don't batch huge
