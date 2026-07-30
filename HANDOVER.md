@@ -794,3 +794,39 @@ for more than one listener before assuming the fix is wrong.)
       Also verified a deliberately broken transform expression fails
       cleanly with a specific error message on that one row rather
       than crashing the run.
+
+## Change log — iteration 18 (`assert-set` — a real silent mis-grading bug)
+
+27. Found a genuine correctness bug, not just a missing feature: promptfoo's
+    `assert-set` type (a nested group of sub-assertions, each optionally
+    `weight`ed, that combine into one weighted-average score compared
+    against a `threshold`) hit `evaluateAssertion`'s `default` case for
+    any unrecognized type, which evaluates as plain `contains` —
+    `actual.includes(expected)` where `expected` is `String(assertion.
+    value || '')`. An `assert-set`'s own `.value` is always empty (its
+    real content lives in a nested `.assert` array `normalizeAssertions`
+    was **also** silently dropping — it only ever copied `type`, `value`,
+    `threshold`, `expected`, `reference`, `timeout*`, `headers`). And
+    `''.includes('')` — actually `anything.includes('')` — is always
+    `true` in JS. Net effect: **every imported config using `assert-set`
+    silently passed unconditionally**, regardless of what the sub-assertions
+    actually checked. Not a missing feature — a false-positive grading bug
+    that would make a genuinely failing target look green.
+    - Fixed `normalizeAssertions` to also preserve `assert` (the nested
+      array) and `weight`.
+    - Added a real `assert-set` case to `evaluateAssertion`: recursively
+      evaluates each sub-assertion, computes `Σ(score×weight) / Σ(weight)`,
+      compares against `threshold` (default 1, promptfoo's own default),
+      returns the full breakdown in `results[]` for transparency.
+    - No new UI — `assert-set` needs a nested assertion editor the
+      existing flat type+value row can't express, so for now it's
+      correctly *evaluated* (import-authored, like `scenarios`) but not
+      yet *authorable* from scratch in the test-case builder. Left as a
+      possible follow-up if a real need for hand-authoring it shows up.
+    - Verified live: imported a config with `assert-set{threshold: 0.5,
+      assert: [{contains "42", weight: 2}, {contains "nonexistent...",
+      weight: 1}]}` against a response containing "42" but not the other
+      string — confirmed the nested `assert`/`weight` fields survived
+      import intact, then ran the eval and got exactly the expected
+      weighted score `(1×2 + 0×1)/3 = 0.667 ≥ 0.5` → pass, with each
+      sub-assertion's individual result visible in the row.

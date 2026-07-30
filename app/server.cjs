@@ -479,6 +479,10 @@ function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValu
         timeout: assertion.timeout,
         timeoutMs: assertion.timeoutMs,
         headers: assertion.headers,
+        // `assert-set` groups nested sub-assertions under `.assert`, each optionally weighted;
+        // both must survive normalization or the group evaluates as if it had no members.
+        assert: Array.isArray(assertion.assert) ? assertion.assert : undefined,
+        weight: assertion.weight,
       }))
       .filter((assertion) => assertion.type);
   }
@@ -2015,6 +2019,25 @@ async function evaluateAssertion(output, assertion = {}, context = {}) {
           approximationReason: error.message,
         };
       }
+    }
+    case 'assert-set': {
+      const subAssertions = Array.isArray(assertion.assert) ? assertion.assert : [];
+      if (!subAssertions.length) {
+        return { pass: true, score: 1, evaluator: 'assert-set', results: [] };
+      }
+      let weightedScoreSum = 0;
+      let weightSum = 0;
+      const results = [];
+      for (const sub of subAssertions) {
+        const subResult = await evaluateAssertion(output, sub, context);
+        const weight = Number(sub.weight ?? 1);
+        weightedScoreSum += (subResult.score ?? (subResult.pass ? 1 : 0)) * weight;
+        weightSum += weight;
+        results.push({ ...sub, ...subResult });
+      }
+      const score = weightSum > 0 ? weightedScoreSum / weightSum : 0;
+      const setThreshold = assertion.threshold !== undefined ? Number(assertion.threshold) : 1;
+      return { pass: score >= setThreshold, score, threshold: setThreshold, evaluator: 'assert-set', results };
     }
     case 'contains':
     default:
