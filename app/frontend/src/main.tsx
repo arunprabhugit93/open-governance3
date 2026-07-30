@@ -2942,7 +2942,11 @@ function EvidenceWorkspace({
         <div className="subpanel-head">
           <div>
             <h3>Run center</h3>
-            <p className="muted">All stored runs for this target across stages.</p>
+            <p className="muted">
+              {runs.length >= 100
+                ? 'Showing the latest 100 matching runs — older runs exist but are not shown.'
+                : 'All stored runs for this target across stages.'}
+            </p>
           </div>
           <span className="badge">{runs.length} runs</span>
         </div>

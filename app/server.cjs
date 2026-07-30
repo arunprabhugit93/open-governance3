@@ -5227,18 +5227,35 @@ app.get('/api/targets/:id/runs', requireAuth, async (req, res) => {
     return res.status(404).json({ error: 'Target not found' });
   }
   const { stageKey, status, outcome } = req.query;
+  // stageKey/status are plain columns, so they're filtered in SQL — filtering them in JS
+  // after a flat `limit 100` would silently hide matching runs whenever 100+ runs of other
+  // stages/statuses were more recent (e.g. a target with heavy red-team traffic could make
+  // "Eval" runs from days ago simply vanish from the filtered view with no indication why).
+  // `outcome` needs to inspect each run's stored results JSON, so it can't be pushed into
+  // SQL as cheaply — pull a wider window (400) before applying it in JS as a partial
+  // mitigation, then cap the final list at 100 most-recent matches.
+  const conditions = ['target_id = $1'];
+  const params = [req.params.id];
+  if (stageKey) {
+    params.push(stageKey);
+    conditions.push(`stage_key = $${params.length}`);
+  }
+  if (status) {
+    params.push(status);
+    conditions.push(`status = $${params.length}`);
+  }
+  const fetchLimit = outcome ? 400 : 100;
   const runs = await pool.query(
     `select * from target_stage_runs
-     where target_id = $1
+     where ${conditions.join(' and ')}
      order by created_at desc
-     limit 100`,
-    [req.params.id],
+     limit ${fetchLimit}`,
+    params,
   );
   const filtered = runs.rows
     .map(rowToRun)
-    .filter((run) => (!stageKey || run.stageKey === stageKey))
-    .filter((run) => (!status || run.status === status))
-    .filter((run) => runMatchesOutcome(run, outcome));
+    .filter((run) => runMatchesOutcome(run, outcome))
+    .slice(0, 100);
   res.json({ runs: filtered });
 });
 

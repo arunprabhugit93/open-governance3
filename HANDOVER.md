@@ -908,3 +908,32 @@ for more than one listener before assuming the fix is wrong.)
       capture unescaped); writing directly to a file with `curl -o`
       confirmed the server's actual JSON output was valid all along —
       not a real bug, just a shell artifact in my own test script.
+
+31. Fourth finding, a real correctness bug in `GET /api/targets/:id/runs`
+    (the "Run center" run history, used by the evidence workspace and
+    the run-compare picker): it fetched only the 100 most recent runs
+    **across all stages**, then filtered by `stageKey`/`status`/
+    `outcome` *after* that cap. For any target with heavier traffic on
+    one stage (e.g. frequent scheduled evals) than another, filtering
+    to a less-frequent stage could return an empty or truncated list
+    even though matching runs existed — just further back than the
+    pre-filter 100-row window, with nothing in the UI to explain why.
+    - Fixed the two cases that are plain columns (`stage_key`,
+      `status`) by pushing them into the SQL `WHERE` clause, so the
+      100-row limit now applies *after* filtering — the correct fix,
+      not a mitigation.
+    - `outcome` (pass/fail/error) can't be pushed into SQL as cheaply
+      since it inspects each run's stored JSON results, not a column —
+      widened the pre-filter fetch to 400 rows when an outcome filter
+      is active as a partial mitigation (meaningfully shrinks the
+      blast radius; doesn't eliminate it for extreme cases), then caps
+      the final outcome-filtered result at 100.
+    - Also added an honest "showing the latest 100 matching runs, older
+      runs exist but aren't shown" note in the UI whenever the returned
+      list hits the cap — previously there was no indication the list
+      could ever be truncated at all.
+    - Verified live: with a target carrying a mix of eval/red-team/
+      model-audit runs, `?stageKey=eval` now returns exactly the eval
+      runs (1) and `?stageKey=red_team` returns exactly the red-team
+      runs (2), matching the real counts rather than whatever
+      happened to survive a stage-blind pre-filter cap.
