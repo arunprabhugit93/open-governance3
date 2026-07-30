@@ -1,5 +1,12 @@
 # End-to-end test evidence — Open Governance3
 
+> **Addendum (same day, after this report)**: the one open defect this
+> report documents below — the Onboarding vs. Target Settings risk-tier
+> option mismatch — has since been fixed and re-verified. Commit
+> `2559a6b`. The original test-log text below is left exactly as written
+> at test time; treat "not fixed" in the Onboarding section as historical,
+> not current status.
+
 Date: 2026-07-30
 Tester: autonomous Claude Code session (live browser + API testing, not code
 inspection)

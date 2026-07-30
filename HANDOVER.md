@@ -50,8 +50,9 @@ The product is **not a stub/skeleton** — it's a real, working implementation:
 - `app/server.cjs` (~4600 lines): every assertion type from the manual's
   catalog (section 9.3) has a real `case` in `evaluateAssertion`. Only two
   were genuinely placeholder-quality: `similar`/`similar:cosine`/`similar:dot`
-  /`similar:euclidean` (was pure Jaccard word-overlap) and `moderation` (still
-  a local heuristic, not a real moderation API — **not yet fixed**).
+  /`similar:euclidean` (was pure Jaccard word-overlap) and `moderation` (was
+  a local heuristic, not a real moderation API) — **both fixed later this
+  session**, see iteration 1 change log below.
 - Provider adapters: `app/shared/provider-catalog.cjs` maps ~50 cataloged
   providers to adapters. Most OpenAI-shaped providers (groq, openrouter,
   together, fireworks, mistral, deepinfra, nvidia-nim, cerebras, sambanova,
@@ -64,10 +65,11 @@ The product is **not a stub/skeleton** — it's a real, working implementation:
 - Full flow (Registry → Onboarding → Target Detail → Eval/Red-team/Model-audit
   workspaces → Evidence) works end-to-end against a live provider — verified
   by running a real eval against Groq through the UI's own API.
-- Known UX gap confirmed by hand-testing in the browser: the frontend has
-  **no real client-side routing** — everything is client state with no URL
-  changes, so refresh always drops back to the Registry root, no deep links,
-  no browser back/forward. Not fixed yet. Good candidate for the UX task.
+- Known UX gap confirmed by hand-testing in the browser: the frontend had
+  **no real client-side routing** — everything was client state with no URL
+  changes, so refresh always dropped back to the Registry root, no deep
+  links, no browser back/forward. **Fixed later this session**, see
+  iteration 2 change log below (hash-based routing).
 - The whole frontend lives in one 3700+ line `app/frontend/src/main.tsx`.
   Not broken, just a maintainability/velocity concern — flagged in task #7,
   not yet acted on.
@@ -323,6 +325,35 @@ proactively in the UI.
   viewer-aware frontend button hiding are still open (minor, lower
   urgency)
 - #9 [pending] CI/CD integration screens, webhook/custom-assertion hardening
+
+## Change log — iteration 8 (E2E test pass + defect fixes)
+
+14. Ran a full live end-to-end test pass across every module (see
+    `EVIDENCE.md` for the complete log) — real browser + live Groq API,
+    not code review. 11/12 modules passed clean; found and fixed the
+    model-audit scanner key-mismatch bug (see iteration 5.1 in
+    `EVIDENCE.md`/commit `d556ec1`) during the pass itself.
+15. Fixed the one remaining documented-but-unfixed defect from that pass:
+    Onboarding's "Initial risk tier" dropdown
+    (Basic/Enhanced/Mission-Critical) didn't match Target Settings' "Risk
+    tier" dropdown (Basic/Regulated/Critical) for the same
+    `metadata.riskTier` field. Reconciled onto Onboarding's option set.
+    Checked all existing targets first — none had ever used
+    "regulated"/"critical", so no data migration was needed. Verified live:
+    a target saved with `riskTier: "enhanced"` now correctly shows
+    "Enhanced" selected in Target Settings instead of no match. Committed
+    as `2559a6b`, pushed.
+16. Cleaned up two stale "not fixed yet" notes higher up in this file
+    (the `moderation` assertion and the routing gap) that had actually
+    been fixed in iterations 1 and 2 respectively — the notes just hadn't
+    been updated at the time. No code changes, just accuracy.
+
+**As of this entry, every defect surfaced by explicit testing this session
+has been fixed and re-verified.** Remaining work is scope expansion
+(more provider adapters, deeper red-team grading for the agency/tool-abuse
+plugins, CI/CD screens, `main.tsx` splitting, login rate limiting/token
+revocation) rather than known bugs — see the task list above for what's
+still open.
 
 ## How to resume
 
