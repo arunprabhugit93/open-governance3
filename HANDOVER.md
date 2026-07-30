@@ -559,3 +559,63 @@ was still holding port 18080, so a `pkill` + relaunch silently left
 requests hitting old code — the new process started but never bound.
 If a restart doesn't seem to pick up a change, check `lsof -i :18080`
 for more than one listener before assuming the fix is wrong.)
+
+## Change log — iteration 13 (API tokens / CI-CD integration, task #9)
+
+21. Built the CI/CD integration piece of task #9: long-lived API tokens
+    so pipelines and cron jobs can call the API without a session login.
+    - Backend: new `api_tokens` table (`app/db/schema.sql`) — id, user_id
+      (FK to `app_users`), name, `token_hash` (SHA-256, not reversible —
+      high-entropy random tokens don't need scrypt), `token_prefix` (first
+      12 chars, shown in the UI so admins can identify a token without
+      exposing it), role, `created_at`, `last_used_at`.
+    - `generateApiToken()`/`hashApiToken()`/`verifyApiToken()` in
+      `app/server.cjs`; `verifyApiToken` updates `last_used_at` on every
+      successful use (fire-and-forget, doesn't block the request).
+    - `requireAuth` now branches on whether the bearer token contains a
+      `.` — session JWTs are `payload.signature`, API tokens
+      (`ogtok_...`) never contain a dot — so both auth paths share one
+      middleware and every existing route gets API-token support for
+      free, with the same RBAC (`requireAdmin`) enforcement.
+    - Three routes, `requireAuth` + `requireAdmin`: `GET/POST /api/tokens`,
+      `DELETE /api/tokens/:id`. The raw token is returned **only** in the
+      `POST` response and is never retrievable again — only the hash is
+      stored, matching how `provider_secrets` never round-trips plaintext.
+    - Frontend: `TokensPage` in `main.tsx` (modeled directly on the
+      existing `UsersPage`), wired into the hash router (`#/tokens`) and
+      an admin-only "API tokens" nav link in `Shell`, alongside "Users".
+      After creating a token, the page shows the raw value once plus a
+      ready-to-copy `curl` example that hits a stage-run endpoint with
+      the new bearer token — this is the actual CI/CD integration
+      surface task #9 asked for (a GitHub Actions job or cron script can
+      copy that curl call directly).
+    - Verified live end-to-end via curl AND through the browser UI:
+      create → returned raw token authenticates a real request → 200 →
+      `last_used_at` updates in Postgres → revoke → same token now
+      rejected with 401 → a viewer-role token gets 200 on GET, 403 on
+      POST/DELETE (RBAC unchanged) → the original admin session JWT
+      still works throughout (no regression to session auth).
+
+22. **Found and fixed a real deploy trap while testing this**: the
+    running server was silently serving the *old legacy static app*
+    from `app/web/` (a vanilla-JS `app.js`/`index.html` predating the
+    React rewrite) instead of the current React frontend. Root cause:
+    `app/frontend/dist/` is (correctly) gitignored, and at the moment
+    this server process last started, `dist/index.html` didn't exist
+    yet (I hadn't run `npm run build` after this session's earlier
+    `main.tsx` edits) — `staticPath` in `server.cjs` falls back to
+    `app/web` whenever the React build is missing, with **no log line**
+    to say so. The UI rendered fine and even logged in fine (both apps
+    share the same backend API), so this was easy to miss — the new
+    "API tokens" nav link and page simply didn't exist because the
+    browser was never running my new code. Fixed two ways: (1) ran
+    `npm run build` in `app/frontend` and restarted the server, and (2)
+    added a `console.warn` at startup whenever the legacy fallback is
+    used, so this can't silently happen again. **Lesson for future
+    iterations: after any `main.tsx`/`api.ts`/`styles.css` change, run
+    `npm run build` in `app/frontend` before restarting the server and
+    testing in the browser** — `npm run frontend:dev` (Vite dev server,
+    port 5173) doesn't have this problem since it always serves fresh
+    source, but the production path (`node app/server.cjs` on 18080,
+    which is what gets tested against the live Groq target) does need
+    an explicit rebuild.

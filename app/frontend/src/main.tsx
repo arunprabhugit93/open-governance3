@@ -42,12 +42,16 @@ import {
   createUser,
   updateUser,
   deleteUser,
+  listApiTokens,
+  createApiToken,
+  deleteApiToken,
   type EvalStageConfigPayload,
   type ModelAuditStageConfigPayload,
   type RedTeamStageConfigPayload,
   type Session,
   type TargetPayload,
   type AppUser,
+  type ApiToken,
 } from './api';
 import type {
   CatalogResponse,
@@ -71,7 +75,7 @@ import type {
 } from './types';
 import './styles.css';
 
-type View = 'registry' | 'onboard' | 'detail' | 'users';
+type View = 'registry' | 'onboard' | 'detail' | 'users' | 'tokens';
 type ExecutableStageKey = 'eval' | 'red_team' | 'model_audit';
 type StageKey = ExecutableStageKey | 'evidence';
 type KeyValueRow = { id: string; name: string; value: string };
@@ -89,6 +93,7 @@ function parseRoute(hash: string): Route {
   }
   if (parts[0] === 'onboard') return { view: 'onboard' };
   if (parts[0] === 'users') return { view: 'users' };
+  if (parts[0] === 'tokens') return { view: 'tokens' };
   return { view: 'registry' };
 }
 
@@ -98,6 +103,7 @@ function routeHash(route: Route): string {
   }
   if (route.view === 'onboard') return '#/onboard';
   if (route.view === 'users') return '#/users';
+  if (route.view === 'tokens') return '#/tokens';
   return '#/registry';
 }
 
@@ -274,12 +280,14 @@ function Shell({
   children,
   onRegistry,
   onUsers,
+  onTokens,
   onLogout,
   isAdmin,
 }: {
   children: React.ReactNode;
   onRegistry: () => void;
   onUsers?: () => void;
+  onTokens?: () => void;
   onLogout: () => void;
   isAdmin?: boolean;
 }) {
@@ -300,6 +308,11 @@ function Shell({
           {isAdmin && onUsers ? (
             <button className="secondary-button" type="button" onClick={onUsers}>
               Users
+            </button>
+          ) : null}
+          {isAdmin && onTokens ? (
+            <button className="secondary-button" type="button" onClick={onTokens}>
+              API tokens
             </button>
           ) : null}
           <button className="ghost-button" type="button" onClick={onLogout}>
@@ -3864,6 +3877,162 @@ function UsersPage({ token, currentUserId }: { token: string; currentUserId?: st
   );
 }
 
+function TokensPage({ token, apiBaseUrl }: { token: string; apiBaseUrl: string }) {
+  const [tokens, setTokens] = useState<ApiToken[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState('admin');
+  const [creating, setCreating] = useState(false);
+  const [revealedToken, setRevealedToken] = useState<{ name: string; rawToken: string } | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const payload = await listApiTokens(token);
+      setTokens(payload.tokens);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load tokens.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleCreate(event: FormEvent) {
+    event.preventDefault();
+    setCreating(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await createApiToken(token, { name: newName, role: newRole });
+      setNewName('');
+      setNewRole('admin');
+      setRevealedToken({ name: result.token.name, rawToken: result.rawToken });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create token.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setError('');
+    try {
+      await deleteApiToken(token, id);
+      setMessage('Token revoked.');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to revoke token.');
+    }
+  }
+
+  const curlExample = revealedToken
+    ? `curl -X POST ${apiBaseUrl}/api/targets/<target-id>/stages/eval/run \\\n  -H "Authorization: Bearer ${revealedToken.rawToken}" \\\n  -H "Content-Type: application/json" \\\n  -d '{}'`
+    : '';
+
+  return (
+    <div className="page">
+      <section className="panel-header">
+        <p className="eyebrow">Administration</p>
+        <h1>API tokens</h1>
+        <p className="muted">
+          Long-lived tokens for CI/CD pipelines and other non-interactive callers. Use them anywhere a session
+          token is accepted, as an <code>Authorization: Bearer</code> header.
+        </p>
+      </section>
+
+      {error ? <div className="banner error">{error}</div> : null}
+      {message ? <div className="banner">{message}</div> : null}
+
+      {revealedToken ? (
+        <section className="panel">
+          <h2>Token created: {revealedToken.name}</h2>
+          <p className="muted">
+            Copy this now — it is shown only once and cannot be retrieved again. If it's lost, revoke it and
+            create a new one.
+          </p>
+          <pre className="code-block">{revealedToken.rawToken}</pre>
+          <p className="muted">Example: trigger an eval run from a CI/CD pipeline</p>
+          <pre className="code-block">{curlExample}</pre>
+          <button className="secondary-button" type="button" onClick={() => setRevealedToken(null)}>
+            Done
+          </button>
+        </section>
+      ) : null}
+
+      <section className="panel">
+        <h2>Create a token</h2>
+        <form className="form-grid" onSubmit={handleCreate}>
+          <div className="field">
+            <label htmlFor="newTokenName">Name</label>
+            <input
+              id="newTokenName"
+              type="text"
+              required
+              value={newName}
+              placeholder="e.g. GitHub Actions, nightly cron"
+              onChange={(event) => setNewName(event.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="newTokenRole">Role</label>
+            <select id="newTokenRole" value={newRole} onChange={(event) => setNewRole(event.target.value)}>
+              <option value="admin">Admin</option>
+              <option value="viewer">Viewer</option>
+            </select>
+          </div>
+          <div className="field span-3">
+            <button className="primary-button" type="submit" disabled={creating || !newName.trim()}>
+              {creating ? 'Creating...' : 'Create token'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="panel">
+        <h2>Existing tokens</h2>
+        {loading ? (
+          <p className="muted">Loading...</p>
+        ) : tokens.length ? (
+          <div className="registry-list">
+            {tokens.map((item) => (
+              <div className="registry-row" key={item.id}>
+                <div>
+                  <h3>{item.name}</h3>
+                  <p className="muted">
+                    {item.token_prefix}... · {item.role} · created by {item.created_by}
+                  </p>
+                </div>
+                <div>
+                  <p className="row-label">Created</p>
+                  <strong>{new Date(item.created_at).toLocaleDateString()}</strong>
+                </div>
+                <div>
+                  <p className="row-label">Last used</p>
+                  <strong>{item.last_used_at ? new Date(item.last_used_at).toLocaleString() : 'Never'}</strong>
+                </div>
+                <button className="danger-button" type="button" onClick={() => handleDelete(item.id)}>
+                  Revoke
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty">No API tokens yet. Create one to authenticate CI/CD pipelines.</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('og_token'));
   const [user, setUser] = useState<User | null>(readStoredUser());
@@ -3926,6 +4095,12 @@ function App() {
     setRouteHash({ view: 'users' });
   }
 
+  function goTokens() {
+    setDetail(null);
+    setView('tokens');
+    setRouteHash({ view: 'tokens' });
+  }
+
   useEffect(() => {
     if (!token) return;
     loadData(token).catch((err) => {
@@ -3948,6 +4123,8 @@ function App() {
       setView('onboard');
     } else if (route.view === 'users') {
       setView('users');
+    } else if (route.view === 'tokens') {
+      setView('tokens');
     } else {
       setView('registry');
     }
@@ -3972,6 +4149,9 @@ function App() {
       } else if (route.view === 'users') {
         setDetail(null);
         setView('users');
+      } else if (route.view === 'tokens') {
+        setDetail(null);
+        setView('tokens');
       } else {
         setDetail(null);
         setView('registry');
@@ -4026,7 +4206,13 @@ function App() {
   }
 
   return (
-    <Shell onRegistry={goRegistry} onUsers={goUsers} isAdmin={user.role === 'admin'} onLogout={handleLogout}>
+    <Shell
+      onRegistry={goRegistry}
+      onUsers={goUsers}
+      onTokens={goTokens}
+      isAdmin={user.role === 'admin'}
+      onLogout={handleLogout}
+    >
       {view === 'registry' ? (
         <RegistryPage
           catalog={catalog}
@@ -4041,6 +4227,8 @@ function App() {
         <OnboardingPage catalog={catalog} token={token} onCreated={handleCreated} onBack={goRegistry} />
       ) : view === 'users' ? (
         <UsersPage token={token} currentUserId={user.id} />
+      ) : view === 'tokens' ? (
+        <TokensPage token={token} apiBaseUrl={window.location.origin} />
       ) : detail ? (
         <TargetDetailPage
           detail={detail}

@@ -32,6 +32,12 @@ const adminPassword = process.env.APP_ADMIN_PASSWORD || 'admin123';
 const reactDistPath = path.join(__dirname, 'frontend', 'dist');
 const legacyWebPath = path.join(__dirname, 'web');
 const staticPath = fs.existsSync(path.join(reactDistPath, 'index.html')) ? reactDistPath : legacyWebPath;
+if (staticPath === legacyWebPath) {
+  console.warn(
+    `WARNING: ${reactDistPath} has no build output — serving the legacy static app from ${legacyWebPath} instead. ` +
+      'Run `npm run build` in app/frontend and restart the server to serve the current React app.',
+  );
+}
 
 const pool = new Pool({
   connectionString:
@@ -239,10 +245,41 @@ function verifyToken(token) {
   }
 }
 
-function requireAuth(req, res, next) {
+const API_TOKEN_PREFIX = 'ogtok_';
+
+function generateApiToken() {
+  return `${API_TOKEN_PREFIX}${crypto.randomBytes(32).toString('hex')}`;
+}
+
+function hashApiToken(rawToken) {
+  // API tokens are high-entropy random strings (not user-chosen passwords), so a fast
+  // deterministic hash is appropriate here — no salt/slow-hash needed, and it lets lookup
+  // be a plain indexed equality query instead of scanning and comparing every stored token.
+  return crypto.createHash('sha256').update(rawToken).digest('hex');
+}
+
+// API tokens are for non-interactive callers (CI/CD pipelines, scripts) that shouldn't need
+// to re-authenticate with a password every 12 hours the way an interactive session does.
+// Distinguished from a session JWT by shape (JWTs from signToken always contain a '.').
+async function verifyApiToken(rawToken) {
+  if (!rawToken || !rawToken.startsWith(API_TOKEN_PREFIX) || rawToken.includes('.')) {
+    return null;
+  }
+  const tokenHash = hashApiToken(rawToken);
+  const result = await pool.query('select * from api_tokens where token_hash = $1', [tokenHash]);
+  const row = result.rows[0];
+  if (!row) return null;
+  pool.query('update api_tokens set last_used_at = now() where id = $1', [row.id]).catch(() => {});
+  return { sub: row.user_id, role: row.role, apiTokenId: row.id };
+}
+
+async function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
-  const payload = verifyToken(token);
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const payload = token.includes('.') ? verifyToken(token) : await verifyApiToken(token).catch(() => null);
   if (!payload) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -4027,6 +4064,41 @@ app.delete('/api/users/:id', requireAuth, requireAdmin, async (req, res) => {
     }
   }
   await pool.query('delete from app_users where id = $1', [req.params.id]);
+  res.status(204).send();
+});
+
+app.get('/api/tokens', requireAuth, requireAdmin, async (_req, res) => {
+  const result = await pool.query(
+    `select t.id, t.name, t.token_prefix, t.role, t.created_at, t.last_used_at, u.email as created_by
+       from api_tokens t join app_users u on u.id = t.user_id
+      order by t.created_at desc`,
+  );
+  res.json({ tokens: result.rows });
+});
+
+app.post('/api/tokens', requireAuth, requireAdmin, async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) {
+    return res.status(400).json({ error: 'A name is required (e.g. "GitHub Actions", "nightly cron")' });
+  }
+  const role = req.body?.role === 'viewer' ? 'viewer' : 'admin';
+  const rawToken = generateApiToken();
+  const result = await pool.query(
+    `insert into api_tokens (id, user_id, name, token_hash, token_prefix, role)
+     values ($1, $2, $3, $4, $5, $6)
+     returning id, name, token_prefix, role, created_at, last_used_at`,
+    [crypto.randomUUID(), req.user.sub, name, hashApiToken(rawToken), rawToken.slice(0, 12), role],
+  );
+  // The raw token is returned exactly once — only its hash is ever persisted, so this
+  // response is the only chance the caller has to see the actual value.
+  res.status(201).json({ token: result.rows[0], rawToken });
+});
+
+app.delete('/api/tokens/:id', requireAuth, requireAdmin, async (req, res) => {
+  const deleted = await pool.query('delete from api_tokens where id = $1 returning id', [req.params.id]);
+  if (!deleted.rows.length) {
+    return res.status(404).json({ error: 'Token not found' });
+  }
   res.status(204).send();
 });
 

@@ -287,6 +287,19 @@ h3 {
   padding: 20px;
 }
 
+.code-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 14px;
+  overflow-x: auto;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .type-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

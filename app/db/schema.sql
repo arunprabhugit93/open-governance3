@@ -109,6 +109,20 @@ create table if not exists app_users (
   updated_at timestamptz not null default now()
 );
 
+-- Long-lived tokens for CI/CD pipelines and other non-interactive callers, as an
+-- alternative to the 12-hour session JWT issued by /api/auth/login. Only the hash is
+-- stored; the raw token is shown once at creation time and never again.
+create table if not exists api_tokens (
+  id uuid primary key,
+  user_id uuid not null references app_users(id) on delete cascade,
+  name text not null,
+  token_hash text not null unique,
+  token_prefix text not null,
+  role text not null default 'admin',
+  created_at timestamptz not null default now(),
+  last_used_at timestamptz
+);
+
 create index if not exists onboarded_targets_target_type_idx on onboarded_targets(target_type);
 create index if not exists onboarded_targets_status_idx on onboarded_targets(status);
 create index if not exists target_test_plan_target_id_idx on target_test_plan(target_id);

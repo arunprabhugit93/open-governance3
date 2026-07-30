@@ -578,3 +578,31 @@ export function updateUser(
 export function deleteUser(token: string, id: string): Promise<void> {
   return request<void>(`/api/users/${id}`, token, { method: 'DELETE' });
 }
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  token_prefix: string;
+  role: string;
+  created_at: string;
+  last_used_at: string | null;
+  created_by: string;
+}
+
+export function listApiTokens(token: string): Promise<{ tokens: ApiToken[] }> {
+  return request<{ tokens: ApiToken[] }>('/api/tokens', token);
+}
+
+export function createApiToken(
+  token: string,
+  payload: { name: string; role: string },
+): Promise<{ token: ApiToken; rawToken: string }> {
+  return request<{ token: ApiToken; rawToken: string }>('/api/tokens', token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteApiToken(token: string, id: string): Promise<void> {
+  return request<void>(`/api/tokens/${id}`, token, { method: 'DELETE' });
+}
