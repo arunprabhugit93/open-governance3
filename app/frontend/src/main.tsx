@@ -2676,6 +2676,9 @@ function EvidenceWorkspace({
   }
 
   async function handleDeleteSchedule(scheduleId: string) {
+    if (!window.confirm('Delete this schedule? It will stop running automatically.')) {
+      return;
+    }
     setError('');
     setScheduleBusy(scheduleId);
     try {
@@ -2747,6 +2750,9 @@ function EvidenceWorkspace({
   }
 
   async function handleDeleteRun(runId: string) {
+    if (!window.confirm('Delete this run? Its results and evidence trail will be permanently removed.')) {
+      return;
+    }
     setError('');
     setRunBusy(runId);
     try {
@@ -3313,6 +3319,13 @@ function TargetDetailPage({
   }
 
   async function handleTargetDelete() {
+    if (
+      !window.confirm(
+        `Delete "${detail.target.displayName}"? This permanently removes all its runs, datasets, schedules, and stored provider keys. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
     setError('');
     setSettingsMessage('');
     setSettingsSaving(true);
@@ -3879,6 +3892,10 @@ function UsersPage({ token, currentUserId }: { token: string; currentUserId?: st
   }
 
   async function handleDelete(id: string) {
+    const target = users.find((user) => user.id === id);
+    if (!window.confirm(`Remove ${target?.email || 'this user'}? They will immediately lose access.`)) {
+      return;
+    }
     setError('');
     try {
       await deleteUser(token, id);
@@ -4023,6 +4040,14 @@ function TokensPage({ token, apiBaseUrl }: { token: string; apiBaseUrl: string }
   }
 
   async function handleDelete(id: string) {
+    const target = tokens.find((item) => item.id === id);
+    if (
+      !window.confirm(
+        `Revoke "${target?.name || 'this token'}"? Anything using it (CI/CD pipelines, scripts) will stop authenticating immediately.`,
+      )
+    ) {
+      return;
+    }
     setError('');
     try {
       await deleteApiToken(token, id);

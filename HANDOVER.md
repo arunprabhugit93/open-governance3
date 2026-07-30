@@ -856,3 +856,22 @@ for more than one listener before assuming the fix is wrong.)
       to the 1 match; an unmatched query shows the new empty-filter
       message (not the "onboard your first model" one); the status
       dropdown correctly filters by the manually-set status field.
+
+29. Second finding from the same UX pass, more severe: **zero
+    destructive actions in the whole app had a confirmation step** —
+    Delete target, Remove user, Revoke API token, Delete schedule,
+    Delete run all fired immediately on click. "Delete target" is the
+    worst case by far: `onboarded_targets` cascades via FK `on delete
+    cascade` to every run, dataset, schedule, and provider secret for
+    that target, so one misclick destroys everything ever recorded
+    against it, no way back. Added `window.confirm()` guards (no new
+    component — matches the codebase's existing preference for the
+    simplest thing that works) with a specific, consequence-stating
+    message on all five: target delete names what gets cascaded away,
+    user removal says they lose access immediately, token revoke says
+    what depends on it will stop authenticating, schedule/run delete
+    are the lower-stakes ones but got the same treatment for
+    consistency. Verified live: created a throwaway API token,
+    confirmed the dialog appears on Revoke and the token is gone only
+    after accepting; re-ran the standard regression check against the
+    live Groq target afterward with no impact.
