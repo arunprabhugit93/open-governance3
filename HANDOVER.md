@@ -830,3 +830,29 @@ for more than one listener before assuming the fix is wrong.)
       import intact, then ran the eval and got exactly the expected
       weighted score `(1×2 + 0×1)/3 = 0.667 ≥ 0.5` → pass, with each
       sub-assertion's individual result visible in the row.
+
+## Change log — iteration 19 (registry search/filter, task #7)
+
+28. Started an actual UX pass on task #7 (not a code refactor — the
+    task is literally about registry/onboarding/workspace usability).
+    First finding: the Registry page had **no search or filter at
+    all** — with 6 test targets it doesn't bite yet, but any real team
+    running this against a real target fleet (10s–100s of targets)
+    would have no way to find one except scrolling. Added a search box
+    (matches display name, model, endpoint URL, promptfoo entity type
+    — client-side, the full list is already loaded) and a status
+    filter dropdown (draft/active/archived/all) to `RegistryPage` in
+    `main.tsx`. Also noticed while doing this that `target.status` is
+    purely manual (set only via the Target Settings dropdown, never
+    auto-derived from stage completion) — confirmed this is deliberate
+    existing design (explicit promotion, not auto-detection) rather
+    than a dead field, so left it as-is.
+    - Distinguished two empty states: "No registry entries yet" (zero
+      targets exist) vs. "No targets match your search or filter"
+      (targets exist, current filter just excludes all of them) — the
+      old code only had the first message, which would have been
+      actively misleading once a filter was added.
+    - Verified live in the browser: typing "import" narrows 6 targets
+      to the 1 match; an unmatched query shows the new empty-filter
+      message (not the "onboard your first model" one); the status
+      dropdown correctly filters by the manually-set status field.

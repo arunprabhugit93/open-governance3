@@ -409,6 +409,22 @@ function RegistryPage({
   const [importText, setImportText] = useState('');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const filteredTargets = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return targets.filter((target) => {
+      if (statusFilter !== 'all' && target.status !== statusFilter) return false;
+      if (!query) return true;
+      return (
+        target.displayName.toLowerCase().includes(query) ||
+        (target.modelName || '').toLowerCase().includes(query) ||
+        (target.endpointUrl || '').toLowerCase().includes(query) ||
+        target.promptfooEntity.toLowerCase().includes(query)
+      );
+    });
+  }, [targets, searchQuery, statusFilter]);
 
   async function handleImport() {
     setImportError('');
@@ -494,32 +510,57 @@ function RegistryPage({
           </div>
         </div>
         {targets.length ? (
-          <div className="registry-list">
-            {targets.map((target) => (
-              <button
-                className="registry-row registry-button"
-                key={target.id}
-                onClick={() => onSelect(target.id)}
-                aria-label={`Open ${target.displayName}`}
-              >
-                <div>
-                  <h3>{target.displayName}</h3>
-                  <p className="muted">
-                    {target.promptfooEntity} · {target.environment}
-                  </p>
-                </div>
-                <div>
-                  <p className="row-label">Target</p>
-                  <strong>{target.modelName || target.endpointUrl || 'Not captured'}</strong>
-                </div>
-                <div>
-                  <p className="row-label">Flow</p>
-                  <strong>{target.testPlan.length} stages</strong>
-                </div>
-                <span className="badge">{target.status}</span>
-              </button>
-            ))}
+          <div className="registry-filters">
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search by name, model, or endpoint..."
+              aria-label="Search targets"
+            />
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              aria-label="Filter by status"
+            >
+              <option value="all">All statuses</option>
+              <option value="draft">Draft</option>
+              <option value="active">Active</option>
+              <option value="archived">Archived</option>
+            </select>
           </div>
+        ) : null}
+        {targets.length ? (
+          filteredTargets.length ? (
+            <div className="registry-list">
+              {filteredTargets.map((target) => (
+                <button
+                  className="registry-row registry-button"
+                  key={target.id}
+                  onClick={() => onSelect(target.id)}
+                  aria-label={`Open ${target.displayName}`}
+                >
+                  <div>
+                    <h3>{target.displayName}</h3>
+                    <p className="muted">
+                      {target.promptfooEntity} · {target.environment}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="row-label">Target</p>
+                    <strong>{target.modelName || target.endpointUrl || 'Not captured'}</strong>
+                  </div>
+                  <div>
+                    <p className="row-label">Flow</p>
+                    <strong>{target.testPlan.length} stages</strong>
+                  </div>
+                  <span className="badge">{target.status}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">No targets match your search or filter.</div>
+          )
         ) : (
           <div className="empty">No registry entries yet. Onboard a model to create the first record.</div>
         )}

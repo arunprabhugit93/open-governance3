@@ -391,6 +391,21 @@ h3 {
   padding-bottom: 16px;
 }
 
+.registry-filters {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.registry-filters input[type="search"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.registry-filters select {
+  width: 180px;
+}
+
 .registry-list {
   display: grid;
   gap: 10px;
