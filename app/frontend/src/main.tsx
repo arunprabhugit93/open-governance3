@@ -3105,6 +3105,7 @@ function TargetDetailPage({
   onBack,
   onRefresh,
   onDeleted,
+  onDuplicated,
 }: {
   detail: TargetDetailResponse;
   token: string;
@@ -3114,8 +3115,10 @@ function TargetDetailPage({
   onBack: () => void;
   onRefresh: (updated: TargetDetailResponse) => void;
   onDeleted: () => Promise<void>;
+  onDuplicated: (id: string) => Promise<void>;
 }) {
   const [error, setError] = useState('');
+  const [duplicating, setDuplicating] = useState(false);
   const [activeStage, setActiveStage] = useState<StageKey>(initialStage || 'eval');
   function goToStage(stage: StageKey) {
     setActiveStage(stage);
@@ -3247,6 +3250,28 @@ function TargetDetailPage({
     }
   }
 
+  async function handleDuplicate() {
+    setError('');
+    setExportMessage('');
+    setDuplicating(true);
+    try {
+      const exported = await exportTarget(token, detail.target.id);
+      const result = await importTarget(token, {
+        target: {
+          ...exported.target,
+          displayName: `${exported.target.displayName} (copy)`,
+        },
+        displayName: `${exported.target.displayName} (copy)`,
+        importedFrom: 'duplicate',
+      });
+      await onDuplicated(result.target.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to duplicate target');
+    } finally {
+      setDuplicating(false);
+    }
+  }
+
   async function handleArtifactDownload(format: 'yaml' | 'csv' | 'markdown' | 'html') {
     setError('');
     setExportMessage('');
@@ -3357,6 +3382,9 @@ function TargetDetailPage({
           </button>
           <button className="secondary-button" type="button" onClick={handleExport}>
             Copy JSON
+          </button>
+          <button className="secondary-button" type="button" disabled={duplicating} onClick={handleDuplicate}>
+            {duplicating ? 'Duplicating...' : 'Duplicate'}
           </button>
           <button className="secondary-button" type="button" onClick={() => handleArtifactDownload('yaml')}>
             Download YAML
@@ -4372,6 +4400,10 @@ function App() {
             goRegistry();
             setMessage('Target deleted.');
             await loadData();
+          }}
+          onDuplicated={async (id) => {
+            await handleCreated(id);
+            setMessage('Target duplicated.');
           }}
         />
       ) : null}

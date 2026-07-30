@@ -875,3 +875,36 @@ for more than one listener before assuming the fix is wrong.)
     confirmed the dialog appears on Revoke and the token is gone only
     after accepting; re-ran the standard regression check against the
     live Groq target afterward with no impact.
+
+30. Third finding: no way to duplicate a target. A manual two-step
+    workaround already existed (Copy JSON on one target, paste into the
+    registry's Import textarea), and it turned out the export shape's
+    `.target` field is already exactly what import expects at
+    `body.target` — so this needed no new backend endpoint, just a
+    one-click wrapper: `handleDuplicate` in `TargetDetailPage` calls
+    `exportTarget`, appends " (copy)" to the display name, calls
+    `importTarget` with that object, and navigates straight to the new
+    target. Reused the existing `handleCreated` navigation callback via
+    a new `onDuplicated` prop rather than writing new routing logic.
+    - Confirmed the existing `stripSecretReferences`/`removeRawSecrets`
+      step in the import path (already there for the manual
+      copy/paste workflow) correctly strips `apiKeySecretId` and
+      `apiKeyMasked` from the clone — a duplicated target's provider
+      keeps its config (model, base URL, temperature, etc.) but starts
+      with no key, matching the correct security model (a
+      `provider_secrets` row belongs to one target; a clone can't
+      silently inherit another target's decryptable secret).
+    - Verified live via the exact payload shape the button now sends
+      (not just reading the code): exported the real E2E test target,
+      built the "(copy)" payload, imported it, and confirmed the copy
+      landed with the right display name, the same provider config,
+      the same test case, and the same red-team plugin list — then
+      confirmed calling the provider on the copy correctly fails with
+      "Invalid API Key" (proving the secret really didn't carry over)
+      before cleaning up. Also caught and ruled out a false alarm while
+      testing: an earlier attempt via a shell-variable round-trip
+      (`EXPORTED=$(curl ...)`) silently corrupted the JSON (a raw
+      newline inside `engineConfigYaml` survived bash's `$(...)`
+      capture unescaped); writing directly to a file with `curl -o`
+      confirmed the server's actual JSON output was valid all along —
+      not a real bug, just a shell artifact in my own test script.
