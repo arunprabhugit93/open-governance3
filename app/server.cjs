@@ -840,6 +840,35 @@ function normalizePromptfooTest(test, index = 0, injectVar = 'prompt') {
   };
 }
 
+// Promptfoo's `scenarios` config is sugar for a var/assertion matrix: each scenario's
+// `config[]` entries (each just extra vars) are crossed with its `tests[]` entries, so a
+// scenario with 2 configs and 3 tests expands to 6 concrete test cases. Imported configs that
+// use `scenarios` instead of (or alongside) a flat `tests` array previously had that array
+// silently dropped from execution — it was preserved in the raw importedConfig snapshot for
+// display, but buildEvalTests only ever reads `testCases`. Expanding scenarios into the same
+// flat shape here means they show up as normal, individually editable test cases.
+function expandScenarios(engineConfig) {
+  const scenarios = Array.isArray(engineConfig.scenarios) ? engineConfig.scenarios : [];
+  const expanded = [];
+  scenarios.forEach((scenario, scenarioIndex) => {
+    const configs = Array.isArray(scenario?.config) && scenario.config.length ? scenario.config : [{}];
+    const tests = Array.isArray(scenario?.tests) ? scenario.tests : [];
+    configs.forEach((configEntry, configIndex) => {
+      tests.forEach((test, testIndex) => {
+        expanded.push({
+          description:
+            test?.description ||
+            `Scenario ${scenarioIndex + 1} · case ${configIndex + 1}.${testIndex + 1}`,
+          vars: { ...(configEntry?.vars || {}), ...(test?.vars || {}) },
+          assert: test?.assert || test?.assertions || [],
+          metadata: test?.metadata,
+        });
+      });
+    });
+  });
+  return expanded;
+}
+
 function inferTargetTypeFromConfig(config, fallback = 'plain_llm') {
   const providers = Array.isArray(config.providers) ? config.providers : [];
   const firstProvider = providers[0];
@@ -862,9 +891,11 @@ function normalizeImportedPromptfooConfig(config, sourceMetadata = {}) {
       ? [normalizePromptfooPrompt(engineConfig.prompts)]
       : [];
   const injectVar = engineConfig.redteam?.injectVar || sourceMetadata.eval?.injectVar || 'prompt';
-  const testCases = Array.isArray(engineConfig.tests)
-    ? engineConfig.tests.map((test, index) => normalizePromptfooTest(test, index, injectVar))
-    : [];
+  const rawTests = [
+    ...(Array.isArray(engineConfig.tests) ? engineConfig.tests : []),
+    ...expandScenarios(engineConfig),
+  ];
+  const testCases = rawTests.map((test, index) => normalizePromptfooTest(test, index, injectVar));
   const firstProvider = providers[0] || {};
   return {
     provider: {

@@ -722,3 +722,30 @@ for more than one listener before assuming the fix is wrong.)
       same request that worked a moment before — then confirmed the
       normal login → use → sign-out → sign-in cycle still works with no
       regression, both via curl and through the actual browser UI.
+
+## Change log — iteration 16 (promptfoo `scenarios` import support)
+
+25. Found and closed a real, if narrower, gap while auditing for
+    remaining promptfoo config concepts not yet supported: imported
+    configs using promptfoo's `scenarios` key (a var/assertion matrix —
+    each scenario's `config[]` entries cross-multiply with its
+    `tests[]` entries) had that array **silently dropped from
+    execution**. The raw scenario data was still preserved in
+    `metadata.eval.importedConfig` (so "Copy JSON"/"Download YAML"
+    still showed it), but `buildEvalTests` only ever reads
+    `testCases`, and `normalizeImportedPromptfooConfig` only ever
+    mapped `engineConfig.tests` into that array — `scenarios` was
+    never read at all. Added `expandScenarios()` in `server.cjs`,
+    which flattens each scenario's config x tests cross product into
+    the same normalized test-case shape as regular `tests` entries
+    (merging each config entry's vars with each test's vars, config
+    losing on conflict), and merged it into both import paths
+    (`POST /api/targets/import` and
+    `POST /api/targets/:id/stages/eval/import` — both already funnel
+    through `normalizeImportedPromptfooConfig`, so one fix covers
+    both). Verified live: imported a config with 2 scenario configs x
+    2 scenario tests, got exactly 4 correctly-merged test cases back
+    (confirmed the persona var from `config[]` and the prompt var from
+    `tests[]` both landed on every case); separately confirmed a plain
+    `tests`-only import (no `scenarios` key) is completely unaffected
+    — still produces exactly the cases it always did.
