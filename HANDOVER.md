@@ -270,16 +270,30 @@ piece of work than the plugins above.
     endpoints, confirmed self-delete is blocked, deleted the test user
     through the UI. Committed as `57c52ae`, pushed.
 
-**Scope boundary, so this isn't overclaimed**: only `/api/users` itself is
-role-gated (`requireAdmin`). None of the other ~30 mutating endpoints
-(targets, runs, schedules, provider secrets, etc.) check `req.user.role` —
-they only check `requireAuth` (any logged-in user, admin or viewer, can
-currently do everything except manage other users). Retrofitting
-fine-grained per-endpoint role checks is real remaining work for task #8,
-along with other production-hardening gaps: no rate limiting on
-`/api/auth/login` (brute-force is possible), no token revocation/logout
-list (a token stays valid until its 12h expiry even after "sign out",
-since sign-out just clears client-side storage), no password reset flow.
+13. Closed the scope gap from the previous entry: added `requireAdmin` to
+    all 21 POST/PATCH/DELETE routes under `/api/targets` (GET routes
+    untouched, so viewers keep read access). Verified with a real viewer
+    account: GET still 200s, every tested mutating route now 403s, admin
+    re-verified unaffected (ran a full eval successfully afterward).
+    **Caught a real data-loss bug while testing**: `PATCH
+    /stages/eval/config` replaced `testCases` with `evalBody.testCases ||
+    []` — unlike `providers`, which correctly falls back to the existing
+    value when omitted from the request body, `testCases` did not. A
+    stray `-d '{}'` call earlier in *this session's own testing* (in the
+    red-team grading iteration) had already silently wiped the live Groq
+    target's test cases with no error surfaced anywhere. Fixed the
+    fallback to match `providers`, restored the test cases, verified a
+    follow-up empty-body PATCH now correctly leaves them alone, and
+    re-ran the full eval (4/4 passing). Committed as `bc80070`, pushed.
+
+**Remaining for task #8** (smaller, lower-urgency items now): no rate
+limiting on `/api/auth/login` (brute-force is possible), no token
+revocation/logout list (a token stays valid until its 12h expiry even
+after "sign out", since sign-out just clears client-side storage), no
+password reset flow, and the frontend doesn't yet hide/disable
+write-action buttons for a signed-in viewer — they're fully blocked
+server-side (403 + the page's existing error banner), just not hidden
+proactively in the UI.
 
 ## Task list (see TaskList tool — these IDs are live, not just notes)
 
@@ -303,9 +317,11 @@ since sign-out just clears client-side storage), no password reset flow.
 - #7 [in_progress] UX pass — routing/deep-links **done** (see iteration 2
   above); still open: splitting `main.tsx`, broader flow/copy review
 - #8 [in_progress] User management/roles/auth hardening — real multi-user
-  accounts + admin/viewer roles + a fixed crash/info-leak bug are done
-  (iteration 6); per-endpoint role enforcement beyond /api/users, login
-  rate limiting, and token revocation are still open
+  accounts, admin/viewer roles enforced on every mutating endpoint, a
+  fixed crash/info-leak bug, and a fixed data-loss bug are all done
+  (iterations 6-7); login rate limiting, token revocation, and
+  viewer-aware frontend button hiding are still open (minor, lower
+  urgency)
 - #9 [pending] CI/CD integration screens, webhook/custom-assertion hardening
 
 ## How to resume
