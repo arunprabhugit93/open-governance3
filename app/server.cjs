@@ -373,7 +373,12 @@ function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValu
         type: String(assertion.type || assertion.assertion || fallbackType || 'contains'),
         value: assertion.value ?? assertion.expected ?? '',
         threshold: assertion.threshold,
-        expected: assertion.expected,
+        // Code-based assertions (javascript/python/webhook) use `value` for the code/URL
+        // itself, so they need `expected` to hold the test case's actual expected value —
+        // fall back to the test-case-level expected when the assertion doesn't set its own,
+        // instead of leaving it undefined (which previously made e.g. a python assertion's
+        // `expected` variable silently become the code string itself when unset).
+        expected: assertion.expected ?? fallbackValue,
         reference: assertion.reference,
         timeout: assertion.timeout,
         timeoutMs: assertion.timeoutMs,
