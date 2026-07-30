@@ -1074,3 +1074,26 @@ for more than one listener before assuming the fix is wrong.)
       regex requires quoted values, matching common `KEY="value"` env
       file conventions) rather than a scanner bug — not something to
       chase further.
+
+## Milestone — all originally tracked tasks complete (iteration 21)
+
+Every task on the original build-out list (providers, assertions,
+red-team, model audit, UX pass, auth hardening, CI/CD tokens, and the
+full E2E test/evidence pass) is now marked complete. Confirmed the
+whole system is healthy with a fresh end-to-end sweep against the live
+E2E reference target: login, all core list endpoints (targets, users,
+tokens, provider catalog, workflow catalog), all three executable
+stages (eval/red-team/model-audit) run and complete successfully, the
+evidence report generates, and all four export formats
+(yaml/csv/markdown/html) return 200 — plus a clean `tsc --noEmit` on
+the frontend. Twenty-one iterations in, the defects found have shifted
+from "whole feature missing" (early iterations: providers, CI/CD
+tokens, scenarios) toward "found while re-reading code that already
+looked done" (later iterations: inverted boolean logic, a scanner
+picker checkbox that didn't actually gate its scanner, findings
+dropping fields that existed one line away) — a sign the obvious gaps
+are closed and further passes will likely find fewer, smaller things.
+Continuing the loop per the standing instruction; future iterations
+should keep applying the same standard (verify live against a real
+target, not just code review) rather than settling for smaller and
+smaller cosmetic changes for their own sake.
