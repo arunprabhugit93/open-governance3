@@ -619,3 +619,63 @@ for more than one listener before assuming the fix is wrong.)
     source, but the production path (`node app/server.cjs` on 18080,
     which is what gets tested against the live Groq target) does need
     an explicit rebuild.
+
+## Change log — iteration 14 (graphql/websocket-chat/browser-chatbot adapters, task #3)
+
+23. Closed the last gap in task #3: the three application-target provider
+    types that were cataloged but threw `"...cataloged but not executable
+    yet"` on every use — `graphql`, `websocket-chat`, `browser-chatbot`.
+    Promptfoo itself doesn't have first-class providers for these (real
+    promptfoo just configures its generic `http` provider for GraphQL,
+    and its `browser`/`websocket` providers aren't in the published npm
+    package we vendor — confirmed by grepping the bundled
+    `node_modules/promptfoo/dist/src/index.cjs`, which has zero
+    `websocket` references), so these are hand-implemented in
+    `server.cjs`:
+    - `callGraphQL` — POSTs `{query, variables}`, defaults to a generic
+      `chat(prompt)` query if the target doesn't supply one, surfaces
+      GraphQL `errors[]` as real failures instead of a false pass.
+    - `callWebSocketChat` — connects with the `ws` package, sends one
+      templated message, resolves on the first reply frame (JSON or
+      plain text), always closes the socket.
+    - `callBrowserChatbot` — drives a real headless Chromium via
+      Playwright (already vendored transitively, chromium binaries were
+      already cached locally): fills `inputSelector`, clicks
+      `submitSelector` (or presses Enter), waits for `responseSelector`,
+      reads its text after a configurable settle delay.
+    - All three take their extra config through the existing
+      `libraryConfig` JSON field on the provider (already wired end to
+      end for `promptfoo-library` providers) — no new DB columns or API
+      fields needed. Extended the frontend's provider-config JSON
+      textarea (previously gated to `promptfoo-library` only) to also
+      show for these three, each with adapter-specific placeholder JSON
+      and help text.
+    - Also noticed `ws`, `playwright`, and `js-yaml` were only ever
+      present as *transitive* deps of `promptfoo` and never declared in
+      `package.json`, even though `server.cjs` already `require()`s
+      `js-yaml` directly — a fresh `npm install` against a future
+      promptfoo version could silently drop them. Added all three as
+      explicit dependencies pinned to their currently-resolved versions.
+    - Verified live: spun up three throwaway local test servers (a
+      GraphQL-shaped JSON endpoint, a `ws` echo server, a static HTML
+      page with a real input/button/response DOM) in the scratchpad, ran
+      each new adapter against them through the real
+      `/api/targets/:id/providers/:index/test` endpoint — GraphQL and
+      WebSocket both round-tripped in single-digit milliseconds, browser
+      automation took ~1.7s (expected — real browser launch), all three
+      returned the correct echoed output. Also confirmed via
+      `/api/provider-catalog` and in the browser's Eval workspace
+      provider dropdown that all three now show as executable (no more
+      "(planned)" suffix) and the config textarea renders with the
+      correct adapter-specific placeholder. `Replicate` is the only
+      remaining "(planned)" entry in the whole catalog now.
+    - Deliberately did **not** wire these into "native engine mode"
+      (the real installed-promptfoo-CLI execution path via
+      `providers/native-target.cjs`) — that bridge script runs inside a
+      separate spawned process and would need its own Playwright/`ws`
+      logic duplicated there. It already throws a clear
+      "Native engine mode does not yet support the X adapter" error for
+      these three (the `nativeAdapters` allowlist in
+      `buildNativePromptfooConfig` simply doesn't include them yet) — an
+      honest, non-broken limitation, not a silent gap. Left as follow-up
+      work if native-mode parity for these three is ever needed.

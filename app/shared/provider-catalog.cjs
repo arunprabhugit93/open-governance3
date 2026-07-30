@@ -96,6 +96,9 @@ const ADAPTER_BY_PROVIDER = {
   'rag-service': 'http-json',
   'agent-service': 'http-json',
   'multi-agent-workflow': 'http-json',
+  graphql: 'graphql',
+  'websocket-chat': 'websocket-chat',
+  'browser-chatbot': 'browser-chatbot',
   'cli-provider': 'cli-provider',
   'custom-script': 'custom-script',
 };

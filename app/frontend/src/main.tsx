@@ -1361,6 +1361,49 @@ function EvalWorkspace({
                     that provider's Promptfoo config object needs — it's merged in as-is.
                   </p>
                 </div>
+              ) : provider.engine === 'graphql' ? (
+                <div className="field span-2">
+                  <label>GraphQL config (JSON)</label>
+                  <textarea
+                    value={provider.libraryConfig || ''}
+                    placeholder={'{"query":"query Chat($prompt: String!) { chat(prompt: $prompt) { text } }","variables":{"prompt":"{{prompt}}"},"responsePath":"data.chat.text"}'}
+                    onChange={(event) => updateProvider(index, { libraryConfig: event.target.value })}
+                  />
+                  <p className="field-help">
+                    Optional. Defaults to a generic <code>chat(prompt)</code> query. Set <code>query</code>,{' '}
+                    <code>variables</code> (values may use <code>{'{{prompt}}'}</code>), and{' '}
+                    <code>responsePath</code> (dot path into the JSON response) to match your schema.
+                  </p>
+                </div>
+              ) : provider.engine === 'websocket-chat' ? (
+                <div className="field span-2">
+                  <label>WebSocket config (JSON)</label>
+                  <textarea
+                    value={provider.libraryConfig || ''}
+                    placeholder={'{"messageTemplate":{"type":"chat","text":"{{prompt}}"},"responsePath":"text","timeoutMs":15000}'}
+                    onChange={(event) => updateProvider(index, { libraryConfig: event.target.value })}
+                  />
+                  <p className="field-help">
+                    Optional. Sends <code>messageTemplate</code> (string or object, <code>{'{{prompt}}'}</code>{' '}
+                    substituted) as the first frame after connecting, waits for one reply, then closes. Set{' '}
+                    <code>responsePath</code> if the reply is JSON and <code>timeoutMs</code> to adjust the wait.
+                  </p>
+                </div>
+              ) : provider.engine === 'browser-chatbot' ? (
+                <div className="field span-2">
+                  <label>Browser automation config (JSON)</label>
+                  <textarea
+                    value={provider.libraryConfig || ''}
+                    placeholder={'{"inputSelector":"#chat-input","submitSelector":"#send","responseSelector":".chat-message.assistant"}'}
+                    onChange={(event) => updateProvider(index, { libraryConfig: event.target.value })}
+                  />
+                  <p className="field-help">
+                    Required: <code>inputSelector</code> and <code>responseSelector</code> (CSS selectors).
+                    Optional: <code>submitSelector</code> (presses Enter if omitted), <code>waitMs</code>,{' '}
+                    <code>settleMs</code> (pause after the response appears, for streaming UIs). Runs a real
+                    headless Chromium via Playwright — expect this provider to be slower than API-based ones.
+                  </p>
+                </div>
               ) : null}
               <div className="field">
                 <label>API key</label>

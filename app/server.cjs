@@ -9,6 +9,7 @@ const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
 const express = require('express');
 const yaml = require('js-yaml');
+const WebSocket = require('ws');
 const { Pool } = require('pg');
 const {
   SUPPORTED_TARGET_TYPES,
@@ -2392,6 +2393,160 @@ async function callHttpJson({ baseUrl, apiKey, prompt, systemPrompt, model, temp
   };
 }
 
+function getByPath(obj, dotPath) {
+  if (!dotPath) return undefined;
+  return String(dotPath)
+    .split('.')
+    .reduce((acc, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), obj);
+}
+
+function deepTemplateSubstitute(value, context) {
+  if (typeof value === 'string') {
+    let text = value;
+    for (const [key, val] of Object.entries(context)) {
+      text = text.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), String(val ?? ''));
+    }
+    return text;
+  }
+  if (Array.isArray(value)) return value.map((item) => deepTemplateSubstitute(item, context));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, deepTemplateSubstitute(val, context)]));
+  }
+  return value;
+}
+
+function parseLibraryConfig(libraryConfig, hint) {
+  if (!libraryConfig) return {};
+  if (typeof libraryConfig === 'object') return libraryConfig;
+  try {
+    return JSON.parse(libraryConfig);
+  } catch {
+    throw new Error(`Provider config must be valid JSON${hint ? ` (${hint})` : ''}`);
+  }
+}
+
+async function callGraphQL({ baseUrl, apiKey, prompt, systemPrompt, model, libraryConfig }) {
+  if (!baseUrl) throw new Error('GraphQL endpoint URL is required');
+  const config = parseLibraryConfig(libraryConfig, 'query/variables/responsePath');
+  const context = { prompt, input: prompt, systemPrompt, model };
+  const query = config.query || 'query Chat($prompt: String!) {\n  chat(prompt: $prompt) {\n    text\n  }\n}';
+  const variables = config.variables ? deepTemplateSubstitute(config.variables, context) : { prompt };
+  const response = await fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      ...(config.headers || {}),
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const bodyText = await response.text();
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    body = { raw: bodyText };
+  }
+  if (!response.ok) {
+    throw new Error(body.errors?.[0]?.message || body.raw || `HTTP ${response.status}`);
+  }
+  if (Array.isArray(body.errors) && body.errors.length) {
+    throw new Error(body.errors.map((err) => err.message).join('; '));
+  }
+  const extracted = config.responsePath ? getByPath(body, config.responsePath) : Object.values(body.data || {})[0];
+  const output = typeof extracted === 'string' ? extracted : JSON.stringify(extracted ?? body.data ?? body);
+  return { output, tokenUsage: null, finishReason: null, rawResponse: body };
+}
+
+async function callWebSocketChat({ baseUrl, apiKey, prompt, systemPrompt, model, libraryConfig }) {
+  if (!baseUrl) throw new Error('WebSocket endpoint URL is required');
+  const config = parseLibraryConfig(libraryConfig, 'messageTemplate/responsePath/timeoutMs');
+  const context = { prompt, input: prompt, systemPrompt, model };
+  const outgoing = config.messageTemplate !== undefined ? deepTemplateSubstitute(config.messageTemplate, context) : prompt;
+  const payload = typeof outgoing === 'string' ? outgoing : JSON.stringify(outgoing);
+  const timeoutMs = Number(config.timeoutMs || 15000);
+  const headers = {
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    ...(config.headers || {}),
+  };
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const socket = new WebSocket(baseUrl, { headers });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.terminate();
+      reject(new Error('WebSocket provider timed out waiting for a response'));
+    }, timeoutMs);
+    socket.on('open', () => {
+      socket.send(payload);
+    });
+    socket.on('message', (data) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const text = data.toString();
+      let output = text;
+      let rawResponse = text;
+      try {
+        const parsed = JSON.parse(text);
+        rawResponse = parsed;
+        const extracted = config.responsePath
+          ? getByPath(parsed, config.responsePath)
+          : parsed.output ?? parsed.response ?? parsed.text ?? parsed.message ?? text;
+        output = typeof extracted === 'string' ? extracted : JSON.stringify(extracted);
+      } catch {
+        // Not JSON — treat the raw frame text as the output.
+      }
+      socket.close();
+      resolve({ output, tokenUsage: null, finishReason: null, rawResponse });
+    });
+    socket.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+let playwrightChromium = null;
+function loadPlaywrightChromium() {
+  if (!playwrightChromium) {
+    playwrightChromium = require('playwright').chromium;
+  }
+  return playwrightChromium;
+}
+
+async function callBrowserChatbot({ baseUrl, prompt, libraryConfig }) {
+  if (!baseUrl) throw new Error('Browser chatbot URL is required');
+  const config = parseLibraryConfig(libraryConfig, 'inputSelector/submitSelector/responseSelector');
+  if (!config.inputSelector) throw new Error('Browser chatbot config requires "inputSelector"');
+  if (!config.responseSelector) throw new Error('Browser chatbot config requires "responseSelector"');
+  const chromium = loadPlaywrightChromium();
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(baseUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: Number(config.navigationTimeoutMs || 30000),
+    });
+    await page.waitForSelector(config.inputSelector, { timeout: Number(config.waitMs || 15000) });
+    await page.fill(config.inputSelector, prompt);
+    if (config.submitSelector) {
+      await page.click(config.submitSelector);
+    } else {
+      await page.press(config.inputSelector, 'Enter');
+    }
+    await page.waitForSelector(config.responseSelector, { timeout: Number(config.waitMs || 15000) });
+    await page.waitForTimeout(Number(config.settleMs || 1500));
+    const output = (await page.locator(config.responseSelector).last().innerText()).trim();
+    return { output, tokenUsage: null, finishReason: null, rawResponse: { output } };
+  } finally {
+    await browser.close();
+  }
+}
+
 function normalizeProviderResult(result) {
   if (typeof result === 'string') {
     return { output: result, tokenUsage: null, finishReason: null, rawResponse: result };
@@ -2554,6 +2709,12 @@ async function callProviderAdapter(adapter, args) {
       return callGemini(args);
     case 'http-json':
       return callHttpJson(args);
+    case 'graphql':
+      return callGraphQL(args);
+    case 'websocket-chat':
+      return callWebSocketChat(args);
+    case 'browser-chatbot':
+      return callBrowserChatbot(args);
     case 'cli-provider':
       return callCliProvider(args);
     case 'custom-script':

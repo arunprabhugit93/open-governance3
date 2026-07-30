@@ -20,7 +20,10 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
+    "js-yaml": "^5.2.1",
     "pg": "^8.22.0",
-    "promptfoo": "^0.121.19"
+    "playwright": "^1.62.0",
+    "promptfoo": "^0.121.19",
+    "ws": "^8.21.1"
   }
 }
