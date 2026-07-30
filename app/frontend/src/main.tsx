@@ -38,11 +38,16 @@ import {
   updateTarget,
   updateSchedule,
   runScheduleNow,
+  listUsers,
+  createUser,
+  updateUser,
+  deleteUser,
   type EvalStageConfigPayload,
   type ModelAuditStageConfigPayload,
   type RedTeamStageConfigPayload,
   type Session,
   type TargetPayload,
+  type AppUser,
 } from './api';
 import type {
   CatalogResponse,
@@ -66,7 +71,7 @@ import type {
 } from './types';
 import './styles.css';
 
-type View = 'registry' | 'onboard' | 'detail';
+type View = 'registry' | 'onboard' | 'detail' | 'users';
 type ExecutableStageKey = 'eval' | 'red_team' | 'model_audit';
 type StageKey = ExecutableStageKey | 'evidence';
 type KeyValueRow = { id: string; name: string; value: string };
@@ -83,6 +88,7 @@ function parseRoute(hash: string): Route {
     return { view: 'detail', targetId: parts[1], stage };
   }
   if (parts[0] === 'onboard') return { view: 'onboard' };
+  if (parts[0] === 'users') return { view: 'users' };
   return { view: 'registry' };
 }
 
@@ -91,6 +97,7 @@ function routeHash(route: Route): string {
     return route.stage ? `#/targets/${route.targetId}/${route.stage}` : `#/targets/${route.targetId}`;
   }
   if (route.view === 'onboard') return '#/onboard';
+  if (route.view === 'users') return '#/users';
   return '#/registry';
 }
 
@@ -266,11 +273,15 @@ const emptyWorkflowCatalog: WorkflowCatalogResponse = {
 function Shell({
   children,
   onRegistry,
+  onUsers,
   onLogout,
+  isAdmin,
 }: {
   children: React.ReactNode;
   onRegistry: () => void;
+  onUsers?: () => void;
   onLogout: () => void;
+  isAdmin?: boolean;
 }) {
   return (
     <section className="app-shell">
@@ -286,6 +297,11 @@ function Shell({
           <button className="secondary-button" type="button" onClick={onRegistry}>
             Registry
           </button>
+          {isAdmin && onUsers ? (
+            <button className="secondary-button" type="button" onClick={onUsers}>
+              Users
+            </button>
+          ) : null}
           <button className="ghost-button" type="button" onClick={onLogout}>
             Sign out
           </button>
@@ -3660,6 +3676,161 @@ function StageWorkspace({
   );
 }
 
+function UsersPage({ token, currentUserId }: { token: string; currentUserId?: string }) {
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newRole, setNewRole] = useState('viewer');
+  const [creating, setCreating] = useState(false);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const payload = await listUsers(token);
+      setUsers(payload.users);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load users.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleCreate(event: FormEvent) {
+    event.preventDefault();
+    setCreating(true);
+    setError('');
+    setMessage('');
+    try {
+      await createUser(token, { email: newEmail, password: newPassword, role: newRole });
+      setNewEmail('');
+      setNewPassword('');
+      setNewRole('viewer');
+      setMessage('User created.');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create user.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleRoleChange(id: string, role: string) {
+    setError('');
+    try {
+      await updateUser(token, id, { role });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update role.');
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setError('');
+    try {
+      await deleteUser(token, id);
+      setMessage('User removed.');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete user.');
+    }
+  }
+
+  return (
+    <div className="page">
+      <section className="panel-header">
+        <p className="eyebrow">Administration</p>
+        <h1>Users</h1>
+        <p className="muted">Manage who can sign in. Admins have full access; viewers can browse but not change settings.</p>
+      </section>
+
+      {error ? <div className="banner error">{error}</div> : null}
+      {message ? <div className="banner">{message}</div> : null}
+
+      <section className="panel">
+        <h2>Add a user</h2>
+        <form className="form-grid" onSubmit={handleCreate}>
+          <div className="field">
+            <label htmlFor="newUserEmail">Email</label>
+            <input
+              id="newUserEmail"
+              type="email"
+              required
+              value={newEmail}
+              onChange={(event) => setNewEmail(event.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="newUserPassword">Password</label>
+            <input
+              id="newUserPassword"
+              type="password"
+              required
+              minLength={8}
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="At least 8 characters"
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="newUserRole">Role</label>
+            <select id="newUserRole" value={newRole} onChange={(event) => setNewRole(event.target.value)}>
+              <option value="viewer">Viewer</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <div className="field span-3">
+            <button className="primary-button" type="submit" disabled={creating}>
+              {creating ? 'Creating...' : 'Create user'}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="panel">
+        <h2>Existing users</h2>
+        {loading ? (
+          <p className="muted">Loading...</p>
+        ) : (
+          <div className="registry-list">
+            {users.map((item) => (
+              <div className="registry-row" key={item.id}>
+                <div>
+                  <h3>{item.email}</h3>
+                  <p className="muted">Added {new Date(item.created_at).toLocaleDateString()}</p>
+                </div>
+                <div className="field">
+                  <label>Role</label>
+                  <select value={item.role} onChange={(event) => handleRoleChange(item.id, event.target.value)}>
+                    <option value="viewer">Viewer</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+                <button
+                  className="danger-button"
+                  type="button"
+                  disabled={item.id === currentUserId}
+                  onClick={() => handleDelete(item.id)}
+                >
+                  {item.id === currentUserId ? 'This is you' : 'Remove'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('og_token'));
   const [user, setUser] = useState<User | null>(readStoredUser());
@@ -3716,6 +3887,12 @@ function App() {
     setRouteHash({ view: 'onboard' });
   }
 
+  function goUsers() {
+    setDetail(null);
+    setView('users');
+    setRouteHash({ view: 'users' });
+  }
+
   useEffect(() => {
     if (!token) return;
     loadData(token).catch((err) => {
@@ -3736,6 +3913,8 @@ function App() {
       openDetail(route.targetId, route.stage);
     } else if (route.view === 'onboard') {
       setView('onboard');
+    } else if (route.view === 'users') {
+      setView('users');
     } else {
       setView('registry');
     }
@@ -3757,6 +3936,9 @@ function App() {
       } else if (route.view === 'onboard') {
         setDetail(null);
         setView('onboard');
+      } else if (route.view === 'users') {
+        setDetail(null);
+        setView('users');
       } else {
         setDetail(null);
         setView('registry');
@@ -3811,7 +3993,7 @@ function App() {
   }
 
   return (
-    <Shell onRegistry={goRegistry} onLogout={handleLogout}>
+    <Shell onRegistry={goRegistry} onUsers={goUsers} isAdmin={user.role === 'admin'} onLogout={handleLogout}>
       {view === 'registry' ? (
         <RegistryPage
           catalog={catalog}
@@ -3824,6 +4006,8 @@ function App() {
         />
       ) : view === 'onboard' ? (
         <OnboardingPage catalog={catalog} token={token} onCreated={handleCreated} onBack={goRegistry} />
+      ) : view === 'users' ? (
+        <UsersPage token={token} currentUserId={user.id} />
       ) : detail ? (
         <TargetDetailPage
           detail={detail}

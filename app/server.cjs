@@ -49,6 +49,26 @@ function encryptionKey() {
   return crypto.createHash('sha256').update(appSecret).digest();
 }
 
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(password), salt, 64);
+  return `scrypt:${salt.toString('hex')}:${hash.toString('hex')}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored || !stored.startsWith('scrypt:')) return false;
+  const [, saltHex, hashHex] = stored.split(':');
+  if (!saltHex || !hashHex) return false;
+  try {
+    const salt = Buffer.from(saltHex, 'hex');
+    const expected = Buffer.from(hashHex, 'hex');
+    const actual = crypto.scryptSync(String(password), salt, expected.length);
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
 function maskSecret(value) {
   const text = String(value || '');
   if (text.length <= 8) return 'stored secret';
@@ -230,9 +250,31 @@ function requireAuth(req, res, next) {
   next();
 }
 
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin role required' });
+  }
+  next();
+}
+
 async function migrate() {
   const schema = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
   await pool.query(schema);
+  await ensureSeedAdmin();
+}
+
+// Bootstraps the first admin user from APP_ADMIN_EMAIL/APP_ADMIN_PASSWORD the first time
+// the app_users table is empty, so existing single-admin deployments keep working with the
+// same credentials after upgrading to real per-user accounts.
+async function ensureSeedAdmin() {
+  const existing = await pool.query('select count(*)::int as count from app_users');
+  if (existing.rows[0].count > 0) return;
+  await pool.query(
+    `insert into app_users (id, email, password_hash, role)
+     values ($1, $2, $3, 'admin')
+     on conflict (email) do nothing`,
+    [crypto.randomUUID(), adminEmail, hashPassword(adminPassword)],
+  );
 }
 
 async function health() {
@@ -3561,17 +3603,111 @@ async function processDueSchedules() {
   }
 }
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
-  if (email !== adminEmail || password !== adminPassword) {
+  if (!email || !password) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
+  const result = await pool.query('select * from app_users where email = $1', [String(email).trim().toLowerCase()]);
+  const user = result.rows[0];
+  if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
   const token = signToken({
-    sub: email,
-    role: 'admin',
+    sub: user.id,
+    email: user.email,
+    role: user.role,
     exp: Date.now() + 1000 * 60 * 60 * 12,
   });
-  res.json({ token, user: { email, role: 'admin' } });
+  res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+});
+
+app.get('/api/users', requireAuth, requireAdmin, async (_req, res) => {
+  const result = await pool.query('select id, email, role, created_at, updated_at from app_users order by created_at asc');
+  res.json({ users: result.rows });
+});
+
+app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
+  const { email, password, role } = req.body || {};
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail || !normalizedEmail.includes('@')) {
+    return res.status(400).json({ error: 'A valid email is required' });
+  }
+  if (!password || String(password).length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  const normalizedRole = role === 'viewer' ? 'viewer' : 'admin';
+  try {
+    const result = await pool.query(
+      `insert into app_users (id, email, password_hash, role)
+       values ($1, $2, $3, $4)
+       returning id, email, role, created_at, updated_at`,
+      [crypto.randomUUID(), normalizedEmail, hashPassword(password), normalizedRole],
+    );
+    res.status(201).json({ user: result.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'A user with that email already exists' });
+    }
+    throw error;
+  }
+});
+
+app.patch('/api/users/:id', requireAuth, requireAdmin, async (req, res) => {
+  const { password, role } = req.body || {};
+  if (role && role !== 'admin' && role !== 'viewer') {
+    return res.status(400).json({ error: 'Role must be "admin" or "viewer"' });
+  }
+  if (role === 'viewer' && req.user.sub === req.params.id) {
+    const adminCount = await pool.query("select count(*)::int as count from app_users where role = 'admin'");
+    if (adminCount.rows[0].count <= 1) {
+      return res.status(400).json({ error: 'Cannot demote the last remaining admin' });
+    }
+  }
+  const sets = [];
+  const values = [];
+  if (password) {
+    if (String(password).length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    values.push(hashPassword(password));
+    sets.push(`password_hash = $${values.length}`);
+  }
+  if (role) {
+    values.push(role);
+    sets.push(`role = $${values.length}`);
+  }
+  if (!sets.length) {
+    return res.status(400).json({ error: 'Nothing to update' });
+  }
+  values.push(req.params.id);
+  const result = await pool.query(
+    `update app_users set ${sets.join(', ')}, updated_at = now() where id = $${values.length}
+     returning id, email, role, created_at, updated_at`,
+    values,
+  );
+  if (!result.rows.length) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  res.json({ user: result.rows[0] });
+});
+
+app.delete('/api/users/:id', requireAuth, requireAdmin, async (req, res) => {
+  if (req.user.sub === req.params.id) {
+    return res.status(400).json({ error: 'Cannot delete your own account while signed in as it' });
+  }
+  const target = await pool.query('select role from app_users where id = $1', [req.params.id]);
+  if (!target.rows.length) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  if (target.rows[0].role === 'admin') {
+    const adminCount = await pool.query("select count(*)::int as count from app_users where role = 'admin'");
+    if (adminCount.rows[0].count <= 1) {
+      return res.status(400).json({ error: 'Cannot delete the last remaining admin' });
+    }
+  }
+  await pool.query('delete from app_users where id = $1', [req.params.id]);
+  res.status(204).send();
 });
 
 app.get('/api/health', async (_req, res) => {

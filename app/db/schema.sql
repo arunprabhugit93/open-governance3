@@ -100,6 +100,15 @@ create table if not exists target_schedules (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists app_users (
+  id uuid primary key,
+  email text not null unique,
+  password_hash text not null,
+  role text not null default 'admin',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists onboarded_targets_target_type_idx on onboarded_targets(target_type);
 create index if not exists onboarded_targets_status_idx on onboarded_targets(status);
 create index if not exists target_test_plan_target_id_idx on target_test_plan(target_id);

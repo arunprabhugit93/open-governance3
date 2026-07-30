@@ -539,3 +539,40 @@ export function runScheduleNow(
     { method: 'POST' },
   );
 }
+
+export interface AppUser {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listUsers(token: string): Promise<{ users: AppUser[] }> {
+  return request<{ users: AppUser[] }>('/api/users', token);
+}
+
+export function createUser(
+  token: string,
+  payload: { email: string; password: string; role: string },
+): Promise<{ user: AppUser }> {
+  return request<{ user: AppUser }>('/api/users', token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateUser(
+  token: string,
+  id: string,
+  payload: { password?: string; role?: string },
+): Promise<{ user: AppUser }> {
+  return request<{ user: AppUser }>(`/api/users/${id}`, token, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteUser(token: string, id: string): Promise<void> {
+  return request<void>(`/api/users/${id}`, token, { method: 'DELETE' });
+}
