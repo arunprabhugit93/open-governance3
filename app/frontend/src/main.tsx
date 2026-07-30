@@ -3464,8 +3464,8 @@ function TargetDetailPage({
                   onChange={(event) => setSettings((current) => ({ ...current, riskTier: event.target.value }))}
                 >
                   <option value="basic">Basic</option>
-                  <option value="regulated">Regulated</option>
-                  <option value="critical">Critical</option>
+                  <option value="enhanced">Enhanced</option>
+                  <option value="mission-critical">Mission-Critical</option>
                 </select>
               </div>
               <div className="field">
