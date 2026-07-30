@@ -3231,11 +3231,12 @@ function executeModelAuditRun(target) {
     },
   ];
 
-  if (artifactRoot) {
+  const selectedScanners = asArray(audit.scanners);
+  if (artifactRoot && selectedScanners.includes('secrets')) {
     try {
       const { findings, filesScanned } = scanArtifactForSecrets(artifactRoot);
       checks.push({
-        key: 'secret-exposure',
+        key: 'secrets',
         label: 'Secret exposure (local scan)',
         pass: findings.length === 0,
         detail: findings.length
@@ -3243,9 +3244,11 @@ function executeModelAuditRun(target) {
           : `Scanned ${filesScanned} file(s) under ${audit.artifactPath}, no secret patterns found.`,
       });
     } catch (error) {
-      checks.push({ key: 'secret-exposure', label: 'Secret exposure (local scan)', pass: false, detail: `Scan failed: ${error.message}` });
+      checks.push({ key: 'secrets', label: 'Secret exposure (local scan)', pass: false, detail: `Scan failed: ${error.message}` });
     }
+  }
 
+  if (artifactRoot && selectedScanners.includes('unsafe-code')) {
     try {
       const { flagged, safe } = scanArtifactForUnsafeSerialization(artifactRoot);
       checks.push({
@@ -3261,7 +3264,19 @@ function executeModelAuditRun(target) {
     } catch (error) {
       checks.push({ key: 'unsafe-code', label: 'Unsafe code / serialization format', pass: false, detail: `Scan failed: ${error.message}` });
     }
+  }
 
+  if (artifactRoot && selectedScanners.includes('model-card')) {
+    const modelCard = findArtifactFile(artifactRoot, /model.?card|readme/i);
+    checks.push({
+      key: 'model-card',
+      label: 'Model card',
+      pass: Boolean(modelCard),
+      detail: modelCard ? `Found ${modelCard}.` : 'No model card / README found alongside the artifact.',
+    });
+  }
+
+  if (artifactRoot) {
     const sbomFile = findArtifactFile(artifactRoot, /sbom|cyclonedx|spdx/i);
     checks.push({
       key: 'sbom',
@@ -3272,14 +3287,6 @@ function executeModelAuditRun(target) {
         : audit.sbomRequired
           ? 'SBOM/MBOM required but no SBOM/CycloneDX/SPDX file was found alongside the artifact.'
           : 'SBOM/MBOM not required for this artifact.',
-    });
-
-    const modelCard = findArtifactFile(artifactRoot, /model.?card|readme/i);
-    checks.push({
-      key: 'model-card',
-      label: 'Model card',
-      pass: Boolean(modelCard),
-      detail: modelCard ? `Found ${modelCard}.` : 'No model card / README found alongside the artifact.',
     });
   } else {
     checks.push({
@@ -3292,7 +3299,6 @@ function executeModelAuditRun(target) {
     });
   }
 
-  const selectedScanners = asArray(audit.scanners);
   for (const scanner of selectedScanners) {
     if (!checks.some((check) => check.key === scanner)) {
       checks.push({
