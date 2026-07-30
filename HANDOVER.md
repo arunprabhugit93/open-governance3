@@ -236,6 +236,51 @@ piece of work than the plugins above.
     afterward — 6/6 passing, same as before the change (no regression).
     Committed as `23ddda6`, pushed. Task #6 marked done.
 
+## Change log — iteration 6 (auth hardening + multi-user)
+
+11. Found and fixed a real crash + info-disclosure bug while starting task
+    #8: a malformed-but-dotted `Authorization: Bearer` header made
+    `verifyToken` call `crypto.timingSafeEqual` on two differently-sized
+    buffers, which throws instead of returning false — and since the app
+    had *no* error-handling middleware at all, Express's default handler
+    turned that into a 500 with the full stack trace (real server file
+    paths included) sent straight to an unauthenticated client. Fixed
+    `verifyToken` to guard buffer lengths and wrapped it so any malformed
+    token degrades to a clean 401, and added a last-resort JSON error
+    handler at the end of the middleware chain so any other unhandled
+    error also returns a generic `{error: "Internal server error"}"`
+    instead of leaking a stack trace, while still logging full details
+    server-side. Verified: malformed/no/valid token cases all behave
+    correctly now. Committed as `caa9c53`.
+12. Replaced the single hardcoded admin/password pair with real multi-user
+    accounts: `app_users` table (scrypt-hashed passwords, no new
+    dependency), `admin`/`viewer` roles, `requireAdmin` middleware, and
+    `/api/users` CRUD (list/create/update-role-or-password/delete) —
+    guarded so you can't delete or demote the last admin, or delete your
+    own currently-signed-in account. First boot seeds one admin from
+    `APP_ADMIN_EMAIL`/`APP_ADMIN_PASSWORD` if `app_users` is empty, so
+    existing deployments keep working with the same login after the
+    upgrade — verified the original `admin@example.com`/`admin123` still
+    logs in. Added an admin-only "Users" page in the frontend (nav item
+    only rendered when `user.role === 'admin'`), wired into the hash
+    router as `#/users`. Verified end-to-end in the actual browser: logged
+    out and back in to pick up the new `id` field on the session, created
+    a viewer user through the UI form, confirmed it shows up, confirmed a
+    viewer's token gets 403 from `/api/users` but 200 from normal
+    endpoints, confirmed self-delete is blocked, deleted the test user
+    through the UI. Committed as `57c52ae`, pushed.
+
+**Scope boundary, so this isn't overclaimed**: only `/api/users` itself is
+role-gated (`requireAdmin`). None of the other ~30 mutating endpoints
+(targets, runs, schedules, provider secrets, etc.) check `req.user.role` —
+they only check `requireAuth` (any logged-in user, admin or viewer, can
+currently do everything except manage other users). Retrofitting
+fine-grained per-endpoint role checks is real remaining work for task #8,
+along with other production-hardening gaps: no rate limiting on
+`/api/auth/login` (brute-force is possible), no token revocation/logout
+list (a token stays valid until its 12h expiry even after "sign out",
+since sign-out just clears client-side storage), no password reset flow.
+
 ## Task list (see TaskList tool — these IDs are live, not just notes)
 
 - #1 [done] Get product running locally + smoke test
@@ -257,7 +302,10 @@ piece of work than the plugins above.
   path is a local file/dir (see iteration 5)
 - #7 [in_progress] UX pass — routing/deep-links **done** (see iteration 2
   above); still open: splitting `main.tsx`, broader flow/copy review
-- #8 [pending] Multi-user/roles, auth hardening beyond single admin login
+- #8 [in_progress] User management/roles/auth hardening — real multi-user
+  accounts + admin/viewer roles + a fixed crash/info-leak bug are done
+  (iteration 6); per-endpoint role enforcement beyond /api/users, login
+  rate limiting, and token revocation are still open
 - #9 [pending] CI/CD integration screens, webhook/custom-assertion hardening
 
 ## How to resume
