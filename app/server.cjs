@@ -496,6 +496,7 @@ function normalizeDatasetRows(rows) {
     vars: row.vars && typeof row.vars === 'object' ? row.vars : undefined,
     tags: Array.isArray(row.tags) ? row.tags : [],
     metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
+    transform: row.transform || row.options?.transform || undefined,
   }));
 }
 
@@ -837,6 +838,7 @@ function normalizePromptfooTest(test, index = 0, injectVar = 'prompt') {
     vars: Object.keys(vars).length ? vars : undefined,
     tags: Array.isArray(test?.tags) ? test.tags : [],
     metadata: test?.metadata && typeof test.metadata === 'object' ? test.metadata : undefined,
+    transform: test?.options?.transform || test?.transform || undefined,
   };
 }
 
@@ -989,6 +991,7 @@ function buildEvalTests(target) {
       },
       assert: normalizeAssertions(testCase.assertions, testCase.assertion, testCase.expected),
       metadata: testCase.metadata || undefined,
+      options: testCase.transform ? { transform: testCase.transform } : undefined,
     }));
   }
   return [
@@ -1370,6 +1373,30 @@ function toolCallF1Assertion(output, assertion, context) {
   const recall = overlap / expectedNames.length;
   const score = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
   return { pass: score >= threshold, score, threshold, precision, recall, actualNames, expectedNames, evaluator: 'local-tool-call-f1' };
+}
+
+// Promptfoo's `transform` (test.options.transform / provider.transform) rewrites the raw
+// provider output before assertions run — commonly used to unwrap JSON, strip formatting, or
+// pull a nested field out of a structured response. Real promptfoo applies this natively when
+// running through the installed library (native engine mode), so this is only needed for the
+// product's own "direct" execution path in executeEvalRun.
+function applyOutputTransform(output, transformExpr, context) {
+  if (!transformExpr) return output;
+  const script = new vm.Script(`(${transformExpr})`);
+  const contextObj = { vars: context.vars || {}, prompt: context.prompt || '', response: context.rawResponse };
+  const sandbox = {
+    output,
+    context: contextObj,
+    vars: context.vars || {},
+    prompt: context.prompt || '',
+    // The raw provider response (e.g. the full JSON body before the adapter's own
+    // best-effort field extraction) — the usual reason to write a transform at all is that
+    // the adapter's heuristic extraction didn't find the right field, so `output` alone
+    // often isn't enough to write a useful expression against.
+    rawResponse: context.rawResponse,
+  };
+  const result = script.runInNewContext(sandbox, { timeout: 100 });
+  return typeof result === 'string' ? result : JSON.stringify(result);
 }
 
 function evaluateJavascriptAssertion(output, assertion, context) {
@@ -3093,6 +3120,21 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         latencyMs = Date.now() - started;
         if (cacheEnabled) {
           await writeEvalCache(target.id, cacheKey, task.provider.label, task.prompt, result, latencyMs);
+        }
+      }
+      const transformExpr = task.test?.options?.transform;
+      if (transformExpr) {
+        try {
+          result = {
+            ...result,
+            output: applyOutputTransform(result.output, transformExpr, {
+              vars: task.vars,
+              prompt: task.prompt,
+              rawResponse: result.rawResponse,
+            }),
+          };
+        } catch (error) {
+          throw new Error(`Output transform failed: ${error.message}`);
         }
       }
       const assertionResults = [];

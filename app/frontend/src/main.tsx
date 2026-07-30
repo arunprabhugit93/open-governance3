@@ -1538,6 +1538,20 @@ function EvalWorkspace({
                 />
                 <p className="field-help">Merged into vars for this case. The input still maps to the inject variable.</p>
               </div>
+              <div className="field span-3">
+                <label>Output transform (JS expression, optional)</label>
+                <input
+                  value={testCase.transform || ''}
+                  onChange={(event) => updateTestCase(index, { transform: event.target.value })}
+                  placeholder={'rawResponse.result.nested.value'}
+                />
+                <p className="field-help">
+                  Runs before assertions, with <code>output</code> (the adapter's best-effort extracted text),{' '}
+                  <code>rawResponse</code> (the full unprocessed provider response), <code>vars</code>, and{' '}
+                  <code>prompt</code> in scope — use it to pull the right field out of a response shape the
+                  adapter didn't recognize.
+                </p>
+              </div>
               <div className="assertion-editor span-3">
                 <div className="row-toolbar">
                   <strong>Assertions</strong>

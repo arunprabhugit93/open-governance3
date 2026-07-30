@@ -749,3 +749,48 @@ for more than one listener before assuming the fix is wrong.)
     `tests[]` both landed on every case); separately confirmed a plain
     `tests`-only import (no `scenarios` key) is completely unaffected
     — still produces exactly the cases it always did.
+
+## Change log — iteration 17 (per-test `transform` support)
+
+26. Added support for promptfoo's per-test `transform` (`test.options.
+    transform` in raw config) — a JS expression that rewrites the raw
+    provider output before assertions run, normally used to unwrap a
+    response shape an adapter's own heuristic field-extraction doesn't
+    recognize. Real promptfoo already implements this natively when
+    running through the installed library (native engine mode), so the
+    only gap was the product's own "direct" execution path
+    (`executeEvalRun`), which had no concept of it at all.
+    - `applyOutputTransform()` in `server.cjs` — same `vm.Script`
+      sandbox pattern as the existing JavaScript assertion evaluator,
+      100ms timeout. Exposes `output` (the adapter's best-effort
+      extracted text) **and** `rawResponse` (the full unprocessed
+      response body) — discovered while testing that `output` alone is
+      often useless for exactly the case a transform exists for: a
+      JSON shape the adapter's own extraction heuristic didn't
+      recognize, where `output` has already collapsed to an empty
+      string before the transform ever runs, so the expression needs
+      the raw body to have anything to work with.
+    - Wired through the full chain: `normalizePromptfooTest` now
+      captures `test.options.transform` on import,
+      `normalizeDatasetRows` preserves it through every save/import
+      path that touches test cases, `buildEvalTests` re-attaches it as
+      `options.transform` when building the executable config, and
+      `executeEvalRun` applies it right after getting the provider
+      result and before assertions evaluate.
+    - Added a "Output transform" field to the test-case editor in
+      `main.tsx` (`EvalStageConfigPayload['testCases'][number]` gained
+      a `transform?: string` field) so it's not import-only — anyone
+      can write one directly against any test case, matching the
+      product's existing pattern of exposing raw/advanced promptfoo
+      concepts as an extra field rather than building bespoke UI for
+      each one.
+    - Verified live end-to-end: a local test server returning
+      `{result: {nested: {value: "READY"}}}` (deliberately not a shape
+      http-json's own extraction heuristic recognizes — confirmed
+      first that the untransformed output was empty and the assertion
+      correctly failed), a test case with `transform:
+      "rawResponse.result.nested.value"` and an `equals: READY`
+      assertion, ran the eval, got `output: "READY"` and `pass: true`.
+      Also verified a deliberately broken transform expression fails
+      cleanly with a specific error message on that one row rather
+      than crashing the run.

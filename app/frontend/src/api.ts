@@ -136,6 +136,7 @@ export interface EvalStageConfigPayload {
     varsJson?: string;
     tags?: string[];
     metadata?: Record<string, unknown>;
+    transform?: string;
   }>;
   promptTemplate: string;
   injectVar: string;
