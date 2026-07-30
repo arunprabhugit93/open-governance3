@@ -528,3 +528,34 @@ lower priority now, since that fallback is honestly labeled and already
 works when a judge provider is configured), task #2 (audit for any
 remaining stubs), task #9 (CI/CD screens), and `main.tsx` splitting
 (task #7, still one ~3900-line file).
+
+## Change log — iteration 12 (custom-assertion hardening, task #9)
+
+20. Reviewed the javascript/python/webhook assertion sandboxes for real
+    security issues first (they're admin-only via RBAC, and admins
+    already have equivalent-or-worse code-execution surface via
+    cli-provider/custom-script, so `vm`'s well-known lack of true
+    isolation isn't a new risk in this product's threat model — not
+    worth "fixing" further without changing the whole trust model).
+    Then live-tested all three end-to-end (hadn't been verified this
+    session) and **found a real correctness bug**: `normalizeAssertions`
+    never carried a test case's top-level `expected` field down into
+    individual assertions when using the modern `assertions: [...]`
+    array format. Standard types (contains/equals/...) were fine since
+    they read `.value` directly, but code-based assertions need a
+    *separate* `expected` field — it was silently `undefined`, and for
+    Python specifically the wrapper's own fallback chain
+    (`assertion.expected || assertion.value`) turned that into
+    evaluating the literal code string as data, so a `expected in
+    output` check silently graded against the wrong thing instead of
+    erroring. Fixed in `normalizeAssertions`; verified all three
+    (javascript, python, and webhook via a real local test server) now
+    correctly read the test's expected value, with no regression to
+    standard assertion types. Commit `3de85dd`.
+
+(Also hit and fixed an unrelated ops issue while restarting to test
+this: a stale `node app/server.cjs` process from an earlier iteration
+was still holding port 18080, so a `pkill` + relaunch silently left
+requests hitting old code — the new process started but never bound.
+If a restart doesn't seem to pick up a change, check `lsof -i :18080`
+for more than one listener before assuming the fix is wrong.)
