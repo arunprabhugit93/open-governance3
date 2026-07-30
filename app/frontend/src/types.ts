@@ -169,6 +169,8 @@ export interface TargetSchedule {
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastStatus: string | null;
+  notifyWebhookUrl: string;
+  notifyOn: 'failure' | 'always';
   createdAt: string;
   updatedAt: string;
 }

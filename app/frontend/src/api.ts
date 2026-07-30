@@ -502,6 +502,8 @@ export interface TargetSchedulePayload {
   intervalMinutes: number;
   enabled: boolean;
   runOptions?: Record<string, unknown>;
+  notifyWebhookUrl?: string;
+  notifyOn?: 'failure' | 'always';
 }
 
 export function listSchedules(token: string, id: string): Promise<{ schedules: TargetSchedule[] }> {

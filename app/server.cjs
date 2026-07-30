@@ -446,6 +446,8 @@ function rowToSchedule(row) {
     nextRunAt: row.next_run_at,
     lastRunAt: row.last_run_at,
     lastStatus: row.last_status,
+    notifyWebhookUrl: row.notify_webhook_url || '',
+    notifyOn: row.notify_on || 'failure',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -4253,6 +4255,25 @@ async function startStageRunAsync(targetId, stageKey, runOptions = {}) {
   return { run: rowToRun(result.rows[0]), detail: await fetchTarget(targetId) };
 }
 
+// Fire-and-forget POST so a slow/unreachable webhook endpoint never blocks or breaks the
+// schedule loop — errors are logged and otherwise swallowed, matching the run itself still
+// being recorded as completed/failed in the DB regardless of whether the notification lands.
+async function sendScheduleWebhook(url, payload) {
+  try {
+    await withTimeout(
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }),
+      10000,
+      'Schedule notification webhook',
+    );
+  } catch (error) {
+    console.error(`Schedule webhook to ${url} failed:`, error.message);
+  }
+}
+
 async function processDueSchedules() {
   const due = await pool.query(
     `select * from target_schedules
@@ -4264,12 +4285,20 @@ async function processDueSchedules() {
   for (const row of due.rows) {
     const schedule = rowToSchedule(row);
     let lastStatus = 'completed';
+    const stageSummaries = [];
+    let hadFailure = false;
     try {
       for (const stageKey of schedule.stageKeys) {
-        await executeAndStoreStageRun(schedule.targetId, stageKey, schedule.runOptions || {});
+        const { run } = await executeAndStoreStageRun(schedule.targetId, stageKey, schedule.runOptions || {});
+        const summary = run.results?.summary || summarizeRows(run.results?.rows || []);
+        if (run.status !== 'completed' || summary.fail > 0 || summary.error > 0) {
+          hadFailure = true;
+        }
+        stageSummaries.push({ stageKey, runId: run.id, status: run.status, summary });
       }
     } catch (error) {
       lastStatus = `failed: ${error.message}`;
+      hadFailure = true;
       console.error(`Schedule ${schedule.id} failed:`, error.message);
     }
     await pool.query(
@@ -4281,6 +4310,19 @@ async function processDueSchedules() {
        where id = $3`,
       [lastStatus, nextRunDate(schedule.intervalMinutes), schedule.id],
     );
+    if (schedule.notifyWebhookUrl && (hadFailure || schedule.notifyOn === 'always')) {
+      const target = await fetchTarget(schedule.targetId).catch(() => null);
+      sendScheduleWebhook(schedule.notifyWebhookUrl, {
+        event: hadFailure ? 'schedule.failed' : 'schedule.completed',
+        scheduleId: schedule.id,
+        scheduleName: schedule.name,
+        targetId: schedule.targetId,
+        targetName: target?.target?.displayName || null,
+        status: lastStatus,
+        stages: stageSummaries,
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
 }
 
@@ -4895,10 +4937,12 @@ app.post('/api/targets/:id/schedules', requireAuth, requireAdmin, async (req, re
   const stageKeys = normalizeStageKeys(body.stageKeys);
   const enabled = body.enabled !== false;
   const nextRunAt = body.nextRunAt ? new Date(body.nextRunAt) : nextRunDate(intervalMinutes);
+  const notifyWebhookUrl = String(body.notifyWebhookUrl || '').trim();
+  const notifyOn = body.notifyOn === 'always' ? 'always' : 'failure';
   const inserted = await pool.query(
     `insert into target_schedules
-      (id, target_id, name, stage_keys, interval_minutes, enabled, run_options, next_run_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8)
+      (id, target_id, name, stage_keys, interval_minutes, enabled, run_options, next_run_at, notify_webhook_url, notify_on)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      returning *`,
     [
       crypto.randomUUID(),
@@ -4909,6 +4953,8 @@ app.post('/api/targets/:id/schedules', requireAuth, requireAdmin, async (req, re
       enabled,
       body.runOptions || {},
       Number.isNaN(nextRunAt.getTime()) ? nextRunDate(intervalMinutes) : nextRunAt,
+      notifyWebhookUrl || null,
+      notifyOn,
     ],
   );
   res.status(201).json({ schedule: rowToSchedule(inserted.rows[0]) });
@@ -4929,6 +4975,9 @@ app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, a
   const current = rowToSchedule(existing.rows[0]);
   const body = req.body || {};
   const intervalMinutes = Math.max(1, Number(body.intervalMinutes ?? current.intervalMinutes));
+  const notifyWebhookUrl =
+    body.notifyWebhookUrl !== undefined ? String(body.notifyWebhookUrl || '').trim() : current.notifyWebhookUrl;
+  const notifyOn = body.notifyOn !== undefined ? (body.notifyOn === 'always' ? 'always' : 'failure') : current.notifyOn;
   const updated = await pool.query(
     `update target_schedules
        set name = $1,
@@ -4937,8 +4986,10 @@ app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, a
            enabled = $4,
            run_options = $5,
            next_run_at = coalesce($6, next_run_at),
+           notify_webhook_url = $7,
+           notify_on = $8,
            updated_at = now()
-     where target_id = $7 and id = $8
+     where target_id = $9 and id = $10
      returning *`,
     [
       String(body.name ?? current.name).trim() || current.name,
@@ -4947,6 +4998,8 @@ app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, a
       body.enabled ?? current.enabled,
       body.runOptions ?? current.runOptions,
       body.nextRunAt ? new Date(body.nextRunAt) : null,
+      notifyWebhookUrl || null,
+      notifyOn,
       req.params.id,
       req.params.scheduleId,
     ],
@@ -4975,7 +5028,9 @@ app.post('/api/targets/:id/schedules/:scheduleId/run-now', requireAuth, requireA
   }
   const schedule = rowToSchedule(result.rows[0]);
   const runs = [];
+  const stageSummaries = [];
   let lastStatus = 'completed';
+  let hadFailure = false;
   try {
     for (const stageKey of schedule.stageKeys) {
       const payload = await executeAndStoreStageRun(req.params.id, stageKey, {
@@ -4984,9 +5039,15 @@ app.post('/api/targets/:id/schedules/:scheduleId/run-now', requireAuth, requireA
         trigger: 'manual-schedule',
       });
       runs.push(payload.run);
+      const summary = payload.run.results?.summary || summarizeRows(payload.run.results?.rows || []);
+      if (payload.run.status !== 'completed' || summary.fail > 0 || summary.error > 0) {
+        hadFailure = true;
+      }
+      stageSummaries.push({ stageKey, runId: payload.run.id, status: payload.run.status, summary });
     }
   } catch (error) {
     lastStatus = `failed: ${error.message}`;
+    hadFailure = true;
     await pool.query(
       `update target_schedules
          set last_run_at = now(), last_status = $1, updated_at = now()
@@ -5005,6 +5066,20 @@ app.post('/api/targets/:id/schedules/:scheduleId/run-now', requireAuth, requireA
      returning *`,
     [lastStatus, nextRunDate(schedule.intervalMinutes), schedule.id],
   );
+  if (schedule.notifyWebhookUrl && (hadFailure || schedule.notifyOn === 'always')) {
+    const target = await fetchTarget(req.params.id).catch(() => null);
+    sendScheduleWebhook(schedule.notifyWebhookUrl, {
+      event: hadFailure ? 'schedule.failed' : 'schedule.completed',
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      targetId: req.params.id,
+      targetName: target?.target?.displayName || null,
+      status: lastStatus,
+      stages: stageSummaries,
+      trigger: 'manual',
+      timestamp: new Date().toISOString(),
+    });
+  }
   res.status(201).json({ schedule: rowToSchedule(updated.rows[0]), runs, detail: await fetchTarget(req.params.id) });
 });
 

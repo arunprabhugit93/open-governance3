@@ -100,6 +100,11 @@ create table if not exists target_schedules (
   updated_at timestamptz not null default now()
 );
 
+-- Added after the initial table (ALTER, not part of the CREATE, since `create table if not
+-- exists` is a no-op against an already-existing table and never picks up new columns).
+alter table target_schedules add column if not exists notify_webhook_url text;
+alter table target_schedules add column if not exists notify_on text not null default 'failure';
+
 create table if not exists app_users (
   id uuid primary key,
   email text not null unique,

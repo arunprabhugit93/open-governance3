@@ -2615,6 +2615,8 @@ function EvidenceWorkspace({
   const [scheduleInterval, setScheduleInterval] = useState(1440);
   const [scheduleEnabled, setScheduleEnabled] = useState(true);
   const [scheduleRunOptions, setScheduleRunOptions] = useState('{"repeat":1,"delayMs":0}');
+  const [scheduleWebhookUrl, setScheduleWebhookUrl] = useState('');
+  const [scheduleNotifyOn, setScheduleNotifyOn] = useState<'failure' | 'always'>('failure');
   const [scheduleBusy, setScheduleBusy] = useState('');
   const [leftRun, setLeftRun] = useState('');
   const [rightRun, setRightRun] = useState('');
@@ -2662,6 +2664,8 @@ function EvidenceWorkspace({
         intervalMinutes: scheduleInterval,
         enabled: scheduleEnabled,
         runOptions,
+        notifyWebhookUrl: scheduleWebhookUrl.trim(),
+        notifyOn: scheduleNotifyOn,
       });
       await loadEvidence();
     } catch (err) {
@@ -2910,6 +2914,28 @@ function EvidenceWorkspace({
           <label>Run options JSON</label>
           <textarea value={scheduleRunOptions} onChange={(event) => setScheduleRunOptions(event.target.value)} />
         </div>
+        <div className="form-grid">
+          <div className="field span-2">
+            <label>Notify webhook URL (optional)</label>
+            <input
+              type="url"
+              value={scheduleWebhookUrl}
+              onChange={(event) => setScheduleWebhookUrl(event.target.value)}
+              placeholder="https://hooks.example.com/assurance-alerts"
+            />
+            <p className="field-help">
+              POSTs a JSON summary here when a scheduled run finishes — use it to wire this into Slack, PagerDuty,
+              or a CI pipeline via a small relay.
+            </p>
+          </div>
+          <div className="field">
+            <label>Notify on</label>
+            <select value={scheduleNotifyOn} onChange={(event) => setScheduleNotifyOn(event.target.value as 'failure' | 'always')}>
+              <option value="failure">Failures only</option>
+              <option value="always">Every run</option>
+            </select>
+          </div>
+        </div>
         <label className="inline-check">
           <input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} />
           <span>Enabled</span>
@@ -2936,6 +2962,9 @@ function EvidenceWorkspace({
                   <p className="muted">
                     Next {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : 'not set'} · Last {schedule.lastStatus || 'not run'}
                   </p>
+                  {schedule.notifyWebhookUrl ? (
+                    <p className="muted">Notifies {schedule.notifyOn === 'always' ? 'every run' : 'on failure'} → {schedule.notifyWebhookUrl}</p>
+                  ) : null}
                 </div>
                 <span className="badge">{schedule.enabled ? 'enabled' : 'paused'}</span>
                 <button className="secondary-button" type="button" disabled={scheduleBusy === schedule.id} onClick={() => handleRunSchedule(schedule.id)}>

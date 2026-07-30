@@ -977,3 +977,46 @@ for more than one listener before assuming the fix is wrong.)
       model-audit findings (which have none of those three fields)
       render with no leftover "[undefined]" or stray punctuation —
       the `finding.plugin ? ... : ''` guards work as intended.
+
+## Change log — iteration 20 (schedule failure webhooks)
+
+34. Sixth finding: scheduled recurring runs (`target_schedules`, driven
+    by a 60s worker loop in `processDueSchedules`) had **no way to be
+    notified when one failed** — the only signal was the schedule's
+    `lastStatus` field, silently updated in the DB, visible only if
+    someone opens that target's Evidence tab and looks. For a product
+    whose whole pitch is unattended recurring assurance checks, a
+    scheduled run silently failing with nobody finding out for days is
+    a real gap — this is the difference between a testing tool and an
+    actual monitoring/alerting surface.
+    - Added `notify_webhook_url` and `notify_on` (`'failure'` default
+      or `'always'`) columns to `target_schedules` via `alter table
+      ... add column if not exists` in `schema.sql` — the existing
+      `create table if not exists` pattern is a no-op against an
+      already-existing table, so new columns need the explicit ALTER
+      (this is the first schema change in this codebase to need that;
+      documented in a comment for whoever adds the next one).
+    - `sendScheduleWebhook()` — fire-and-forget POST with a 10s
+      timeout; errors are logged and swallowed so a slow/unreachable
+      endpoint can never block the schedule worker or the run itself
+      from being recorded (which happens regardless of notification
+      delivery).
+    - Wired into **both** places a schedule can execute:
+      `processDueSchedules` (the automatic worker) and
+      `POST .../schedules/:id/run-now` (the manual trigger, which
+      previously had no notification path at all — added matching
+      logic so a user can hit "Run now" to verify their webhook/Slack
+      integration actually works before trusting the real schedule).
+      "Failure" is defined as: the run didn't reach `status ===
+      'completed'`, or its summary has any `fail`/`error` count above
+      zero.
+    - Frontend: "Notify webhook URL" + "Notify on: failures only /
+      every run" fields on the schedule creation form, and the
+      configured webhook (URL + mode) now shows on each existing
+      schedule row.
+    - Verified live end to end with a real local HTTP receiver: created
+      a schedule with `notifyOn: always`, hit "Run now", confirmed the
+      receiver got a POST with the exact event type, schedule/target
+      names, and per-stage pass/fail summary; then set `notifyOn:
+      failure` and confirmed a passing run correctly sends **no**
+      webhook at all (not just an empty one) before cleaning up.
