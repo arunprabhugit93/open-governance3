@@ -562,6 +562,11 @@ function buildRunFindings(run, limit = 10) {
       status: row.error ? 'error' : 'fail',
       error: row.error || null,
       output: row.output || '',
+      // Present on red-team rows only — surfaced so the compliance findings report can show
+      // attack category and severity instead of just a bare pass/fail line.
+      plugin: row.plugin || undefined,
+      strategy: row.strategy || undefined,
+      severity: row.severity || undefined,
     }));
 }
 
@@ -655,7 +660,9 @@ function buildMarkdownReport(report) {
   ];
   if (report.findings.length) {
     for (const finding of report.findings) {
-      lines.push(`- ${finding.status.toUpperCase()} ${finding.stageKey}: ${finding.test} (${finding.provider || 'provider'})`);
+      const tag = finding.severity ? ` [${finding.severity}]` : '';
+      const attack = finding.plugin ? ` — ${finding.plugin}${finding.strategy ? `/${finding.strategy}` : ''}` : '';
+      lines.push(`- ${finding.status.toUpperCase()}${tag} ${finding.stageKey}: ${finding.test} (${finding.provider || 'provider'})${attack}`);
       if (finding.error || finding.output) {
         lines.push(`  - ${markdownEscape(finding.error || finding.output).slice(0, 500)}`);
       }
@@ -689,7 +696,8 @@ function buildHtmlReport(report) {
   const findingItems = report.findings.length
     ? report.findings.map((finding) => `
       <article class="finding">
-        <strong>${escapeHtml(finding.status.toUpperCase())} ${escapeHtml(finding.stageKey)} / ${escapeHtml(finding.test)}</strong>
+        <strong>${escapeHtml(finding.status.toUpperCase())}${finding.severity ? ` [${escapeHtml(finding.severity)}]` : ''} ${escapeHtml(finding.stageKey)} / ${escapeHtml(finding.test)}</strong>
+        ${finding.plugin ? `<p class="finding-attack">${escapeHtml(finding.plugin)}${finding.strategy ? ` / ${escapeHtml(finding.strategy)}` : ''}</p>` : ''}
         <p>${escapeHtml(finding.error || finding.output || 'No output captured.')}</p>
       </article>`).join('')
     : '<p>No failing findings in latest runs.</p>';
@@ -724,6 +732,7 @@ function buildHtmlReport(report) {
     th, td { border-bottom: 1px solid #dde3ee; padding: 10px; text-align: left; }
     th { font-size: 12px; color: #667085; text-transform: uppercase; }
     .finding { border: 1px solid #dde3ee; border-radius: 8px; padding: 12px; margin: 10px 0; background: #fff8f8; }
+    .finding-attack { margin: 4px 0; font-size: 12px; color: #667085; text-transform: uppercase; letter-spacing: 0.02em; }
     pre { white-space: pre-wrap; background: #101827; color: #e8edfb; padding: 14px; border-radius: 8px; overflow: auto; }
     @media (max-width: 760px) { .score { grid-template-columns: 1fr; } main { width: calc(100% - 24px); } }
   </style>

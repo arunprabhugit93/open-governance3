@@ -254,6 +254,9 @@ export interface TargetReport {
     status: string;
     error: string | null;
     output: string;
+    plugin?: string;
+    strategy?: string;
+    severity?: string;
   }>;
   engineConfigYaml: string;
 }

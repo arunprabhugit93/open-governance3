@@ -2357,8 +2357,16 @@ function RedTeamWorkspace({
           <div className="results-table">
             {(latestRun?.results?.rows || []).map((row: any, index) => (
               <div className="result-row" key={`${row.plugin}-${row.strategy}-${index}`}>
-                <span className={row.pass ? 'result-pass' : 'result-fail'}>{row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}</span>
-                <strong>{row.test}</strong>
+                <span className={row.pass ? 'result-pass' : 'result-fail'}>
+                  {row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}
+                  {row.severity ? ` · ${row.severity}` : ''}
+                </span>
+                <strong>
+                  {row.test}
+                  {row.plugin ? (
+                    <span className="muted"> ({row.plugin}{row.strategy ? `/${row.strategy}` : ''})</span>
+                  ) : null}
+                </strong>
                 <p>{row.output || row.error}</p>
               </div>
             ))}
@@ -2840,8 +2848,16 @@ function EvidenceWorkspace({
           {(report?.findings || []).length ? (
             report!.findings.map((finding, index) => (
               <div className="result-row" key={`${finding.runId}-${finding.test}-${index}`}>
-                <span className="result-fail">{finding.status.toUpperCase()}</span>
-                <strong>{finding.stageKey.replace('_', ' ')} · {finding.test}</strong>
+                <span className="result-fail">
+                  {finding.status.toUpperCase()}
+                  {finding.severity ? ` · ${finding.severity}` : ''}
+                </span>
+                <strong>
+                  {finding.stageKey.replace('_', ' ')} · {finding.test}
+                  {finding.plugin ? (
+                    <span className="muted"> ({finding.plugin}{finding.strategy ? `/${finding.strategy}` : ''})</span>
+                  ) : null}
+                </strong>
                 <p>{finding.error || finding.output || 'No output captured.'}</p>
               </div>
             ))

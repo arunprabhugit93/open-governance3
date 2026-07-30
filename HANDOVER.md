@@ -948,3 +948,32 @@ for more than one listener before assuming the fix is wrong.)
     fix: `transform: item.transform || item.options?.transform`,
     matching the same fallback shape used everywhere else transform is
     read from an external config.
+
+33. Fifth finding: red-team failures were shown with **no attack
+    category or severity anywhere in the product** — not in the
+    red-team workspace's own "Latest run" results table, not in the
+    Evidence workspace's "Findings" list, not in the markdown/HTML
+    exports. Every red-team result row already carries `plugin`,
+    `strategy`, and `severity` (confirmed live: e.g. `{plugin:
+    "system-prompt-override", strategy: "jailbreak", severity:
+    "medium"}`), but `buildRunFindings` in `server.cjs` (the function
+    that turns run rows into the report's `findings[]`) only ever
+    copied `stageKey`/`runId`/`test`/`provider`/`status`/`error`/
+    `output` — silently dropping exactly the fields a security triage
+    workflow needs most to decide what to look at first. For a product
+    whose entire purpose is AI security assurance, showing "FAIL:
+    some-test-name" with no severity or attack category is a real gap,
+    not cosmetic.
+    - Added `plugin`/`strategy`/`severity` (all `undefined` for
+      non-red-team rows, e.g. model-audit findings — verified this
+      renders cleanly with no stray formatting) to `buildRunFindings`'s
+      output, the `findings[]` TypeScript type, both the markdown and
+      HTML report generators, the Evidence workspace's Findings list,
+      and the red-team workspace's own results table (which reads raw
+      run rows directly and had the same gap independently).
+    - Verified live: pulled a real red-team run's raw rows and
+      confirmed `plugin`/`strategy`/`severity` are present and correct
+      on every row; regenerated the markdown export and confirmed
+      model-audit findings (which have none of those three fields)
+      render with no leftover "[undefined]" or stray punctuation —
+      the `finding.plugin ? ... : ''` guards work as intended.
