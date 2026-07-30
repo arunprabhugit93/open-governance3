@@ -355,15 +355,107 @@ plugins, CI/CD screens, `main.tsx` splitting, login rate limiting/token
 revocation) rather than known bugs — see the task list above for what's
 still open.
 
+## MAJOR ARCHITECTURAL DISCOVERY — iteration 9, read this before doing more parity work
+
+The user pushed back on the "hand-write every adapter/plugin" approach this
+whole session had been taking, correctly pointing out `promptfoo` is
+already a project dependency (`app/server.cjs` `require`s it). That was
+right, and it changes the playbook for everything below.
+
+**`node_modules/promptfoo` is a real, usable programmatic library, not
+just a CLI.** Confirmed by direct testing (`node -e "require('promptfoo')..."`):
+- `pf.loadApiProvider(providerPath, {options:{config}})` — the REAL
+  provider loader for all ~86 promptfoo provider files (bedrock, vertex,
+  watsonx, databricks, cloudflare-ai, snowflake, mcp, fal, voyage, every
+  OpenAI-compatible-shaped one, all of it). Verified end-to-end with a live
+  Groq call — correct output, real token usage, latency, even guardrails
+  metadata this product's own hand-rolled adapters don't produce.
+- `pf.redteam.generate({config: <yaml path>, write:false, cache:false})` —
+  the REAL redteam engine, all 157 plugin ids / 35 strategy ids, with
+  actually sophisticated on-topic adversarial generation (see the commit
+  below for a real example). It's CLI-oriented: it resolves its config
+  from a **file path**, not inline options — write a temp YAML, point it
+  there, clean up after.
+- `pf.assertions` and `pf.evaluate` also exist and are very likely
+  similarly usable — **not yet exploited, see "Next" below.**
+
+**A real bug in the vendored library, now understood and fixed generally**:
+promptfoo's bundled `dist/src/index.cjs` double-wraps chalk's ESM interop,
+so `chalk.default` inside their bundle ends up equal to the *raw* required
+chalk module rather than chalk's actual `.default` export — and the raw
+module doesn't carry chalk's color methods (verified directly: `chalk.red`
+is undefined, `chalk.default.red` is defined). Every `chalk.default.X(...)`
+call in their bundle throws `chalk.default.X is not a function` — which
+hits constantly, since they use it for routine progress/warning logging,
+not just error paths. **Fixed once, generally, in `shimChalkForPromptfoo()`**
+(called from `loadPromptfooLibrary()` in `app/server.cjs`) by injecting a
+plain always-string-returning shim into Node's `require.cache` for
+`'chalk'` before promptfoo is first required. **Any future code that calls
+into the `promptfoo` library must go through `loadPromptfooLibrary()`,
+not a bare `require('promptfoo')`**, or it will hit this bug again.
+
+**What's now wired through this**, both shipped and verified live this
+iteration (commits `4f1c8b0`, `d1faf1b`):
+- 10 more providers execute via `pf.loadApiProvider` instead of being
+  `adapter-required` stubs: vertex-ai, aws-bedrock, aws-sagemaker, watsonx,
+  databricks, snowflake-cortex, cloudflare-workers-ai, mcp-server, fal,
+  voyage. A new "Provider-specific config (JSON)" field in the Eval
+  workspace lets the admin pass whatever auth shape each one actually
+  needs (AWS keys, GCP service account, IBM project id, ...) straight
+  through to promptfoo's own provider config — verified against the real
+  Databricks provider code (got its real "workspace URL required" error,
+  then a real timeout once past that, both handled cleanly).
+- Red team workspace has a new opt-in "Use real adversarial generation"
+  checkbox (`redteam.useRealGeneration`). When on, `buildRedTeamCases`
+  calls the real engine using the target's own provider as the attacker
+  model; falls back automatically to the existing ~20-template local
+  generator on any failure. Default is off — this costs a real generation
+  call, so it should stay opt-in, not silently change existing behavior.
+
+**Next, in priority order, if picking this up**:
+1. Real assertion grading via `pf.assertions` — would replace the
+   remaining approximations (bleu/gleu/rouge/meteor are legitimate local
+   n-gram math already, but `similar` still needs a configured embedding
+   judge or it approximates, and there may be other assertion types worth
+   swapping to the real implementation). Same pattern as the provider
+   bridge: try the real one, fall back to local on failure.
+2. Real red-team **grading** via `pf.redteam.Graders` — right now,
+   real-generated probes (`source: 'generated-live'`) still get graded by
+   this product's own plugin-specific heuristics
+   (`system-prompt-overlap`/`pii-pattern`/`refusal-heuristic`), not
+   promptfoo's own graders, even though the generated test cases come back
+   with a `promptfoo:redteam:<plugin>` assert type that implies real
+   grading is available. Wiring that up would give proper grading for all
+   157 plugins instead of ~20.
+3. Expand `PROMPTFOO_NATIVE_GENERATION_PREFIXES` / add more entries to
+   `PROMPTFOO_LIBRARY_PROVIDERS` if new gaps are found — the pattern is
+   proven, it's now mostly a matter of confirming more prefixes against
+   `promptfoo-source/src/providers/registry.ts`.
+
+Given this, re-scope task #3 (providers) and #5 (redteam) as "library
+integration, not hand-written adapters" — writing more bespoke HTTP
+adapters by hand is no longer the right move for filling gaps; check
+whether `pf.loadApiProvider`/`pf.redteam`/`pf.assertions` already covers
+it first.
+
+(While restarting to test this, also discovered and recovered from an
+unrelated environment issue: the Docker daemon had stopped during this
+long-running session — probably a sleep/wake cycle — taking the Postgres
+container down with it. Restarted both; confirmed no data loss.)
+
 ## How to resume
 
 ```bash
 cd /Users/arunprabhu/Documents/opngov/open-governance3
-docker ps | grep open-governance3-postgres || npm run db:up
+docker ps | grep open-governance3-postgres || (open -a Docker && sleep 15 && npm run db:up)
 node app/server.cjs &            # if not already running (check :18080)
 npm run frontend:dev &           # if not already running (check :5173)
 curl -s http://localhost:18080/api/health
 ```
+
+If Docker/Postgres was down (check `docker ps -a` for an Exited container
+before assuming data loss — `docker start open-governance3-postgres` first,
+data lives in a named volume and survives container restarts).
 
 Login: `admin@example.com` / `admin123`. Pick up the next task from
 `TaskList`, prefer lowest pending ID unless something more urgent surfaced.
