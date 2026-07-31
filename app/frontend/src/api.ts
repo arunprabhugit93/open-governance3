@@ -23,6 +23,19 @@ export interface Session {
   user: User;
 }
 
+// `assert-set` is promptfoo's weighted nested-assertion group: `assert` holds the flat
+// sub-assertions (each with an optional `weight`), `threshold` is the minimum weighted
+// average score to pass. Only one level of nesting is supported in this editor — a
+// sub-assertion can't itself be another assert-set from the UI (importing YAML still
+// supports arbitrary nesting; this covers the overwhelmingly common single-level case).
+export interface EvalAssertion {
+  type: string;
+  value: string;
+  threshold?: number;
+  weight?: number;
+  assert?: Array<{ type: string; value: string; weight?: number }>;
+}
+
 export interface TargetPayload {
   displayName: string;
   targetType: string;
@@ -128,10 +141,7 @@ export interface EvalStageConfigPayload {
     input: string;
     assertion: string;
     expected: string;
-    assertions?: Array<{
-      type: string;
-      value: string;
-    }>;
+    assertions?: Array<EvalAssertion>;
     vars?: Record<string, string>;
     varsJson?: string;
     tags?: string[];

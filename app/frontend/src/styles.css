@@ -734,6 +734,11 @@ h3 {
 
 .assertion-row {
   display: grid;
+  gap: 8px;
+}
+
+.assertion-row-main {
+  display: grid;
   grid-template-columns: minmax(150px, 0.35fr) minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
@@ -747,6 +752,31 @@ h3 {
   background: #fff;
   color: var(--ink);
   padding: 10px 11px;
+}
+
+.assertion-subset {
+  margin-left: 20px;
+  padding: 10px 0 10px 14px;
+  border-left: 2px solid var(--line);
+  display: grid;
+  gap: 8px;
+}
+
+.assertion-subrow {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.3fr) minmax(0, 1fr) 70px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.assertion-subrow input,
+.assertion-subrow select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 10px;
 }
 
 .row-toolbar,
@@ -1101,6 +1131,8 @@ h3 {
   .eval-builder,
   .evidence-grid,
   .assertion-row,
+  .assertion-row-main,
+  .assertion-subrow,
   .custom-probe-row,
   .form-grid,
   .option-grid,

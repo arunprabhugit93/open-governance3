@@ -60,6 +60,7 @@ const ASSERTION_TYPES = [
   { key: 'similar:euclidean', label: 'Similarity euclidean', description: 'Approximate semantic similarity using token overlap.' },
   { key: 'moderation', label: 'Moderation', description: 'Real moderation API when a judge provider is configured; falls back to a local keyword heuristic otherwise.' },
   { key: 'guardrails', label: 'Guardrails', description: 'Checks provider-reported guardrails metadata (flagged/blocked). Only meaningful for providers that return guardrails data — e.g. the library-bridged providers (Bedrock, Vertex, watsonx, etc.); passes with a neutral score when no guardrails metadata is present.' },
+  { key: 'assert-set', label: 'Assertion group (weighted)', description: 'Nested group of sub-assertions, each optionally weighted, combined into one weighted-average score compared against a threshold.' },
 ];
 
 const REDTEAM_PLUGINS = [

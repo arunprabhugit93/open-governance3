@@ -1603,3 +1603,52 @@ this loop, not an unlimited test double.
       (correctly) preserved the just-set test value instead of clearing
       it; had to explicitly PATCH `assert: []` to actually restore the
       target to its true original state.
+
+## Change log — iteration 31 (`assert-set` authoring UI, `/loop` continuation)
+
+49. Closed the last item on the "not yet covered" list from item 27
+    (iteration 18's original finding): `assert-set` (promptfoo's
+    weighted nested-assertion group) evaluated correctly when a config
+    was imported, but there was no way to build one from scratch in the
+    eval test-case editor.
+    - Extended the per-test-case assertion editor in the Eval workspace:
+      picking "Assertion group (weighted)" as an assertion's type now
+      swaps the plain value input for a threshold field (0-1) and reveals
+      a nested list of sub-assertions, each with its own type dropdown,
+      value input, and weight — with add/remove controls, reusing the
+      same dropdown/catalog pattern as the top-level assertion editor
+      (the sub-assertion dropdown excludes `assert-set` itself, so
+      authoring stays to one level of nesting from the UI; arbitrarily
+      deep nesting still works via YAML import, matching the scope
+      decision already on record from iteration 18).
+    - Added `EvalAssertion` as a shared frontend type (`api.ts`) so the
+      test-case editor, `updateTestCaseAssertion`, and three new helpers
+      (`updateSubAssertion`/`addSubAssertion`/`removeSubAssertion`) all
+      agree on the same shape (`type`, `value`, `threshold?`, `weight?`,
+      `assert?`). Switching a row's type into/out of `assert-set` now
+      seeds/clears the nested fields so stale data can't linger under
+      the wrong type.
+    - **Found and fixed a real bug in my own earlier work while manually
+      testing this in the browser**: `assert-set` was never actually
+      added to `ASSERTION_TYPES` in `workflow-catalog.cjs` — meaning the
+      type dropdown (driven off that catalog) had no `assert-set` option
+      at all, so the brand-new nested editor I'd just built was
+      completely unreachable. Caught by checking the live DOM directly
+      (`document.querySelectorAll('select')`) rather than trusting that
+      "the backend already evaluates it" meant the frontend exposed it.
+      Added the missing catalog entry (61 -> 62 assertion types).
+    - Verified live end to end against the real E2E reference target
+      (config captured before, restored after): PATCHed in a test case
+      shaped exactly like the new UI's save payload (`assert-set` with
+      `threshold: 0.5` and two weighted `contains` sub-assertions,
+      weights 2 and 1), confirmed the config round-tripped with
+      `threshold`/`assert`/`weight` all intact, then ran a real eval
+      against the live Groq target — got back
+      `score: 0.667, threshold: 0.5, pass: true`, matching the hand-
+      computed `(1×2+0×1)/3` exactly, with each sub-assertion's own
+      pass/fail visible in `results[]`. Also confirmed in the live
+      browser DOM (not just a screenshot) that selecting "Assertion
+      group (weighted)" renders the nested editor with a real CSS grid
+      (`display: grid`, 4 sensible column widths, not stacked/broken).
+      Reran the target's original baseline config afterward to confirm
+      no regression. Cleaned up the test run and restored the config.

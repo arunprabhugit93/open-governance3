@@ -47,6 +47,7 @@ import {
   listApiTokens,
   createApiToken,
   deleteApiToken,
+  type EvalAssertion,
   type EvalStageConfigPayload,
   type ModelAuditStageConfigPayload,
   type RedTeamStageConfigPayload,
@@ -234,7 +235,7 @@ function assertionHelp(assertion: string): string {
   }
 }
 
-function assertionsForCase(testCase: EvalStageConfigPayload['testCases'][number]) {
+function assertionsForCase(testCase: EvalStageConfigPayload['testCases'][number]): EvalAssertion[] {
   return testCase.assertions?.length
     ? testCase.assertions
     : [{ type: testCase.assertion || 'contains', value: testCase.expected || '' }];
@@ -1090,23 +1091,75 @@ function EvalWorkspace({
     setTestCases((current) => current.map((testCase, i) => (i === index ? { ...testCase, ...patch } : testCase)));
   }
 
-  function updateTestCaseAssertion(
-    caseIndex: number,
-    assertionIndex: number,
-    patch: Partial<{ type: string; value: string }>,
-  ) {
+  function updateTestCaseAssertion(caseIndex: number, assertionIndex: number, patch: Partial<EvalAssertion>) {
     setTestCases((current) =>
       current.map((testCase, i) => {
         if (i !== caseIndex) return testCase;
-        const assertions = assertionsForCase(testCase).map((assertion, j) =>
-          j === assertionIndex ? { ...assertion, ...patch } : assertion,
-        );
+        const assertions = assertionsForCase(testCase).map((assertion, j) => {
+          if (j !== assertionIndex) return assertion;
+          const next = { ...assertion, ...patch };
+          // Switching into assert-set seeds one sub-assertion so the nested editor isn't
+          // empty; switching away from it drops the now-meaningless nested/threshold fields.
+          if (patch.type === 'assert-set' && !next.assert?.length) {
+            next.assert = [{ type: 'contains', value: '', weight: 1 }];
+            next.threshold = next.threshold ?? 1;
+          } else if (patch.type && patch.type !== 'assert-set') {
+            delete next.assert;
+            delete next.threshold;
+          }
+          return next;
+        });
         return {
           ...testCase,
           assertions,
           assertion: assertions[0]?.type || testCase.assertion,
           expected: assertions[0]?.value || testCase.expected,
         };
+      }),
+    );
+  }
+
+  function updateSubAssertion(
+    caseIndex: number,
+    assertionIndex: number,
+    subIndex: number,
+    patch: Partial<{ type: string; value: string; weight: number }>,
+  ) {
+    setTestCases((current) =>
+      current.map((testCase, i) => {
+        if (i !== caseIndex) return testCase;
+        const assertions = assertionsForCase(testCase).map((assertion, j) => {
+          if (j !== assertionIndex) return assertion;
+          const sub = (assertion.assert || []).map((row, k) => (k === subIndex ? { ...row, ...patch } : row));
+          return { ...assertion, assert: sub };
+        });
+        return { ...testCase, assertions };
+      }),
+    );
+  }
+
+  function addSubAssertion(caseIndex: number, assertionIndex: number) {
+    setTestCases((current) =>
+      current.map((testCase, i) => {
+        if (i !== caseIndex) return testCase;
+        const assertions = assertionsForCase(testCase).map((assertion, j) =>
+          j === assertionIndex
+            ? { ...assertion, assert: [...(assertion.assert || []), { type: 'contains', value: '', weight: 1 }] }
+            : assertion,
+        );
+        return { ...testCase, assertions };
+      }),
+    );
+  }
+
+  function removeSubAssertion(caseIndex: number, assertionIndex: number, subIndex: number) {
+    setTestCases((current) =>
+      current.map((testCase, i) => {
+        if (i !== caseIndex) return testCase;
+        const assertions = assertionsForCase(testCase).map((assertion, j) =>
+          j === assertionIndex ? { ...assertion, assert: (assertion.assert || []).filter((_row, k) => k !== subIndex) } : assertion,
+        );
+        return { ...testCase, assertions };
       }),
     );
   }
@@ -1643,34 +1696,96 @@ function EvalWorkspace({
                   </button>
                 </div>
                 {assertionsForCase(testCase).map((assertion, assertionIndex) => (
-                  <div className="assertion-row" key={`${index}-${assertionIndex}`}>
-                    <select
-                      value={assertion.type}
-                      onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { type: event.target.value })}
-                    >
-                      {(workflowCatalog.assertions.length ? workflowCatalog.assertions : [{ key: 'contains', label: 'Contains' }]).map((assertionType) => (
-                        <option value={assertionType.key} key={assertionType.key}>
-                          {assertionType.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      value={assertion.value}
-                      onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { value: event.target.value })}
-                      placeholder={assertionHelp(assertion.type)}
-                    />
-                    <button
-                      className="ghost-button"
-                      type="button"
-                      disabled={assertionsForCase(testCase).length === 1}
-                      onClick={() =>
-                        updateTestCase(index, {
-                          assertions: assertionsForCase(testCase).filter((_assertion, i) => i !== assertionIndex),
-                        })
-                      }
-                    >
-                      Remove
-                    </button>
+                  <div className={assertion.type === 'assert-set' ? 'assertion-row assertion-row-set' : 'assertion-row'} key={`${index}-${assertionIndex}`}>
+                    <div className="assertion-row-main">
+                      <select
+                        value={assertion.type}
+                        onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { type: event.target.value })}
+                      >
+                        {(workflowCatalog.assertions.length ? workflowCatalog.assertions : [{ key: 'contains', label: 'Contains' }]).map((assertionType) => (
+                          <option value={assertionType.key} key={assertionType.key}>
+                            {assertionType.label}
+                          </option>
+                        ))}
+                      </select>
+                      {assertion.type === 'assert-set' ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="1"
+                          value={assertion.threshold ?? 1}
+                          onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { threshold: Number(event.target.value) })}
+                          title="Minimum weighted average score to pass (0-1)"
+                        />
+                      ) : (
+                        <input
+                          value={assertion.value}
+                          onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { value: event.target.value })}
+                          placeholder={assertionHelp(assertion.type)}
+                        />
+                      )}
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={assertionsForCase(testCase).length === 1}
+                        onClick={() =>
+                          updateTestCase(index, {
+                            assertions: assertionsForCase(testCase).filter((_assertion, i) => i !== assertionIndex),
+                          })
+                        }
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    {assertion.type === 'assert-set' ? (
+                      <div className="assertion-subset">
+                        <p className="field-help">
+                          Sub-assertions below are weighted and averaged into one score; the group passes when that
+                          score meets the threshold above.
+                        </p>
+                        {(assertion.assert || []).map((sub, subIndex) => (
+                          <div className="assertion-subrow" key={`${index}-${assertionIndex}-${subIndex}`}>
+                            <select
+                              value={sub.type}
+                              onChange={(event) => updateSubAssertion(index, assertionIndex, subIndex, { type: event.target.value })}
+                            >
+                              {(workflowCatalog.assertions.length ? workflowCatalog.assertions : [{ key: 'contains', label: 'Contains' }])
+                                .filter((assertionType) => assertionType.key !== 'assert-set')
+                                .map((assertionType) => (
+                                  <option value={assertionType.key} key={assertionType.key}>
+                                    {assertionType.label}
+                                  </option>
+                                ))}
+                            </select>
+                            <input
+                              value={sub.value}
+                              onChange={(event) => updateSubAssertion(index, assertionIndex, subIndex, { value: event.target.value })}
+                              placeholder={assertionHelp(sub.type)}
+                            />
+                            <input
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              value={sub.weight ?? 1}
+                              onChange={(event) => updateSubAssertion(index, assertionIndex, subIndex, { weight: Number(event.target.value) })}
+                              title="Weight"
+                            />
+                            <button
+                              className="ghost-button"
+                              type="button"
+                              disabled={(assertion.assert || []).length === 1}
+                              onClick={() => removeSubAssertion(index, assertionIndex, subIndex)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                        <button className="secondary-button" type="button" onClick={() => addSubAssertion(index, assertionIndex)}>
+                          Add sub-assertion
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
               </div>
