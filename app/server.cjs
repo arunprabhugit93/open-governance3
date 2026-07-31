@@ -4194,6 +4194,29 @@ async function executeModelAuditRun(target) {
     }
   }
 
+  // Same shallow-presence pattern as model-card above: checks that data-lineage
+  // *documentation* exists (a datasheet/dataset-card/provenance manifest — the standard
+  // artifacts the "Datasheets for Datasets" practice and most model registries expect
+  // alongside training data), not that the lineage claims are independently verified. Real
+  // lineage *tracking* would need an external data-provenance/catalog system this
+  // self-hosted product has no access to — the label and detail text are explicit that this
+  // is a documentation-presence check, not a verified pass.
+  if (selectedScanners.includes('data-lineage')) {
+    if (artifactRoot) {
+      const lineageDoc = findArtifactFile(artifactRoot, /datasheet|dataset.?card|data.?lineage|provenance/i);
+      checks.push({
+        key: 'data-lineage',
+        label: 'Data lineage documentation (local presence check)',
+        pass: Boolean(lineageDoc),
+        detail: lineageDoc
+          ? `Found ${lineageDoc}. This confirms lineage documentation exists, not that its claims are independently verified.`
+          : 'No datasheet, dataset card, or data-lineage/provenance file found alongside the artifact.',
+      });
+    } else {
+      checks.push({ key: 'data-lineage', label: 'Data lineage documentation (local presence check)', pass: false, detail: unreadablePathDetail('Data lineage check') });
+    }
+  }
+
   // Gated on selectedScanners like the other three local-file checks above — previously this
   // ran unconditionally whenever an artifact path was set, so unchecking "SBOM/MBOM" in the
   // scanner picker had no actual effect on whether the check ran.

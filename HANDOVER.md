@@ -1867,3 +1867,37 @@ this loop, not an unlimited test double.
       `data-lineage` is the only model-audit scanner still honestly
       unimplemented — genuinely needs external data-provenance-tracking
       infrastructure this product has no access to.
+
+## Change log — iteration 36 (real `data-lineage` scanner — closes the model-audit catalog)
+
+54. Closed the last model-audit scanner gap. Reconsidered `data-lineage`
+    using the exact same shallow-but-real pattern already used for
+    `model-card` (which only checks that a model-card-shaped file
+    exists, not that its content is accurate) — data lineage has an
+    equivalent standard artifact ("Datasheets for Datasets," dataset
+    cards, provenance manifests) that a real check can honestly verify
+    the *presence* of, even without a full external lineage-tracking
+    system.
+    - Added a `data-lineage` branch to `executeModelAuditRun` using
+      `findArtifactFile` (already used by `model-card`) with a
+      `/datasheet|dataset.?card|data.?lineage|provenance/i` pattern.
+      Label and detail text are explicit that this confirms
+      *documentation exists*, not that its lineage claims are
+      independently verified — same honesty standard as every other
+      scanner this session.
+    - Verified live with two real fixtures: one with a `DATASHEET.md`
+      present (correctly passed, named the actual file found) and one
+      with only an unrelated `README.txt` (correctly failed, honest "no
+      datasheet/dataset card/lineage file found" message). Reran the
+      E2E reference target's existing model-audit config afterward —
+      zero regression (identical 9 checks, same 2 pre-existing
+      failures, since that target doesn't select `data-lineage`).
+      Deleted the disposable target and fixtures afterward.
+    - **All 10 scanners in the model-audit catalog now have a real
+      implementation** (7 local file/pattern scanners, 1 real
+      external-CLI-backed scanner for `malware`, and this presence
+      check for `data-lineage`) — the "not evaluated — no scanner
+      implemented" fallback path in `executeModelAuditRun` is now
+      unreachable for any scanner in the current catalog; it remains in
+      place only as a safety net for a future scanner key that gets
+      added to the catalog before its check is implemented.
