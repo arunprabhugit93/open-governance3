@@ -1356,3 +1356,59 @@ this loop, not an unlimited test double.
       `red_team` (`{"numTests":7}` alone no longer wipes `purpose`/
       `plugins`/`strategies`), then fully restored the E2E target's
       original audit and red-team config afterward.
+
+## Change log — iteration 28 (`guardrails` assertion type, `/loop` continuation)
+
+44. Re-entered the standing `/loop` after the evidence pass to keep closing
+    promptfoo parity gaps. Diffed this product's 60-type assertion catalog
+    against real promptfoo's `BaseAssertionTypesSchema`
+    (`promptfoo-source/src/types/index.ts`) and found `guardrails` missing —
+    a real, on-brand gap for a security-assurance product: it checks a
+    provider's own guardrails/safety-filter metadata (`flagged`,
+    `flaggedInput`/`flaggedOutput`, `reason`) rather than re-deriving safety
+    from the output text the way `moderation`/`is-refusal` do. (Also
+    surveyed `pi`, `perplexity(-score)`, `ruby`, `skill-used`,
+    `trajectory:*`, `trace-*` — left those out: `pi` needs a hosted
+    promptfoo classifier this self-hosted product has no equivalent for,
+    `perplexity` needs logprobs most providers here don't return, `ruby`
+    duplicates the existing javascript/python script-assertion surface
+    without adding capability, and `trajectory:*`/`trace-*` need real
+    OpenTelemetry span data this product doesn't capture — each would be a
+    fake/placeholder pass, not a real check, so left out rather than
+    shipping something dishonest.)
+    - Added `case 'guardrails':` to `evaluateAssertion` in `server.cjs`,
+      matching real promptfoo's semantics from
+      `promptfoo-source/src/assertions/guardrails.ts`: reads
+      `context.providerResponse?.rawResponse?.guardrails`; flagged -> fail
+      with the provider's own reason; not flagged -> pass; metadata absent
+      entirely -> pass with score 0 and an explicit "not applied" reason
+      (never a silent/fake pass framed as a real check). `not-guardrails`
+      needed no extra code — it falls out of the existing generic
+      `not-<type>` inversion wrapper for free.
+    - `rawResponse` was already threaded through to every assertion via
+      `context.providerResponse` (confirmed by grep — this is the same
+      field the existing `transform` feature reads), so this only needed
+      the one new assertion case, no new plumbing. Only the 10
+      library-bridged providers (`pf.loadApiProvider` — Bedrock, Vertex,
+      watsonx, etc., see the iteration 9 architectural note above) are
+      capable of actually populating `guardrails`; this product's
+      hand-rolled adapters (openai-compatible, graphql, websocket-chat,
+      browser-chatbot, ...) never will, and correctly hit the honest
+      "not applied" branch instead of faking a result.
+    - Added the catalog entry to `ASSERTION_TYPES` in
+      `app/shared/workflow-catalog.cjs` (60 -> 61), with a description
+      that's upfront about which providers actually populate it. No
+      frontend change needed — confirmed by reading `main.tsx` that the
+      assertion-type dropdown renders directly off
+      `workflowCatalog.assertions` (`/api/workflow-catalog`), not a
+      hardcoded list.
+    - Verified live against the real E2E reference target (config captured
+      before, restored after): ran a real eval with a `guardrails`
+      assertion against the live Groq (openai-compatible) target, which
+      has no guardrails metadata by construction — confirmed the row
+      passed with `score: 0` and reason `"Guardrail was not applied
+      (provider/adapter did not return guardrails metadata)"`, i.e. an
+      honest neutral result, not a fake pass or a fake fail. Also
+      confirmed `/api/workflow-catalog` now reports 61 assertion types
+      including `guardrails`. Cleaned up the test run and restored the
+      target's original eval config afterward.

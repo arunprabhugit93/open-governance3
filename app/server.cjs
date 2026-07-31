@@ -1998,6 +1998,17 @@ async function evaluateAssertion(output, assertion = {}, context = {}) {
     }
     case 'is-refusal':
       return refusalAssessment(actual);
+    case 'guardrails': {
+      const guardrails = context.providerResponse?.rawResponse?.guardrails;
+      if (!guardrails) {
+        return { pass: true, score: 0, reason: 'Guardrail was not applied (provider/adapter did not return guardrails metadata)' };
+      }
+      if (guardrails.flagged) {
+        const reason = guardrails.reason || (guardrails.flaggedInput ? 'Prompt failed safety checks' : guardrails.flaggedOutput ? 'Output failed safety checks' : 'Content failed safety checks');
+        return { pass: false, score: 0, reason, flagged: true };
+      }
+      return { pass: true, score: 1, reason: 'Content passed safety checks', flagged: false };
+    }
     case 'is-valid-function-call':
     case 'is-valid-openai-function-call':
       return validFunctionCallAssertion(actual, assertion, context);
