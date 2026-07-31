@@ -1475,7 +1475,22 @@ function EvalWorkspace({
                   <p className="field-help">Model should be the deployment name, not the base model name.</p>
                 </div>
               ) : null}
-              {provider.engine === 'promptfoo-library' ? (
+              {provider.engine === 'openai-compatible' ? (
+                <div className="field span-2">
+                  <label>Provider-specific config (JSON, optional)</label>
+                  <textarea
+                    value={provider.libraryConfig || ''}
+                    placeholder={'{"requestLogprobs":true}'}
+                    onChange={(event) => updateProvider(index, { libraryConfig: event.target.value })}
+                  />
+                  <p className="field-help">
+                    Set <code>requestLogprobs: true</code> to request per-token logprobs (needed for the{' '}
+                    <code>perplexity</code>/<code>perplexity-score</code> assertions). Off by default — some
+                    OpenAI-compatible providers reject the request outright for models that don't support it,
+                    which would break every eval call against that provider, not just perplexity assertions.
+                  </p>
+                </div>
+              ) : provider.engine === 'promptfoo-library' ? (
                 <div className="field span-2">
                   <label>Provider-specific config (JSON)</label>
                   <textarea

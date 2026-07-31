@@ -1746,3 +1746,63 @@ this loop, not an unlimited test double.
       unimplemented — genuinely need external malware-signature/data-
       lineage-tracking infrastructure this product doesn't have, so
       faking either would be dishonest rather than a real check.
+
+## Change log — iteration 34 (`perplexity`/`perplexity-score` assertions — caught a real regression before it shipped)
+
+52. Added the last two assertion types from the original "niche, might
+    not be feasible" list (see iteration 28) that turned out to actually
+    be implementable: `perplexity` and `perplexity-score`. Real
+    promptfoo computes both from a provider's own per-token logprobs
+    (`perplexity = exp(-avg(logProbs))`; `perplexity-score` is a
+    normalized `1/(1+perplexity)` — see
+    `promptfoo-source/src/assertions/perplexity.ts`), which is a real,
+    honest local computation as long as the provider actually returns
+    logprobs — unlike `pi` (confirmed via
+    `promptfoo-source/src/matchers/llmGrading.ts` that it calls out to
+    promptfoo's *hosted* remote scoring API with no local equivalent at
+    all) or `trajectory:*`/`trace-*` (need real tracing infra this
+    product doesn't capture), which remain correctly excluded.
+    - Added `case 'perplexity':`/`case 'perplexity-score':` to
+      `evaluateAssertion`, matching real promptfoo's math and pass/fail
+      logic exactly, reading from a new `context.providerResponse.
+      logProbs` field. Honest failure (not a fake pass) when the field
+      is absent, mirroring promptfoo's own error message for providers
+      that don't return logprobs.
+    - **Caught a real regression during live verification, before
+      committing**: my first pass had `callOpenAICompatible` request
+      `logprobs: true` *unconditionally* on every call, reasoning
+      "harmless if the provider ignores it." That assumption was wrong —
+      tested live against the E2E reference target's real Groq
+      connection and the *baseline eval test* (which doesn't even use a
+      perplexity assertion) started failing with a real Groq API error:
+      `` `logprobs` is not supported with this model `` — Groq's
+      `llama-3.1-8b-instant` rejects the entire chat-completion request
+      outright when the field is present, not just the logprobs part of
+      it. Checked real promptfoo's own OpenAI provider
+      (`openai/chat.ts`) and confirmed it *also* only sends `logprobs`
+      when explicitly opted in (`callApiOptions.includeLogProbs`), never
+      unconditionally — my "harmless" assumption was simply wrong, and
+      shipping it would have broken eval runs for every OpenAI-
+      compatible provider/model combination that behaves like Groq's.
+    - Fixed by making it opt-in per provider: added a `requestLogprobs`
+      boolean to the same `libraryConfig` JSON field already used for
+      graphql/websocket/browser's extra config (no new DB/API surface),
+      defaulting to off. Extended the Eval workspace's provider config UI
+      to show a "Provider-specific config (JSON)" field for
+      `openai-compatible` providers too (previously only shown for
+      library-bridged/graphql/websocket/browser providers), with help
+      text explaining the tradeoff plainly.
+    - Verified live, three separate ways, all against the real E2E
+      target: (1) confirmed the regression existed — baseline eval
+      failed with the real Groq error while `logprobs:true` was
+      unconditional; (2) after the fix, reran the identical baseline
+      eval and confirmed it passes again (1/1, no error) — regression
+      closed; (3) reran WITH `requestLogprobs: true` explicitly opted in
+      and got the same real Groq rejection, proving the opt-in flag
+      genuinely controls the request parameter and that Groq's specific
+      model genuinely doesn't support logprobs (not a code bug) — this
+      product has no OpenAI-compatible provider on hand in this
+      environment whose model actually returns logprobs, so a genuine
+      full-pass perplexity computation is unverified, but the failure
+      mode at every step is the real provider's own, never a fake
+      result. Restored the target's original config afterward.

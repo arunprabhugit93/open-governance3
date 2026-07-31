@@ -61,6 +61,8 @@ const ASSERTION_TYPES = [
   { key: 'moderation', label: 'Moderation', description: 'Real moderation API when a judge provider is configured; falls back to a local keyword heuristic otherwise.' },
   { key: 'guardrails', label: 'Guardrails', description: 'Checks provider-reported guardrails metadata (flagged/blocked). Only meaningful for providers that return guardrails data — e.g. the library-bridged providers (Bedrock, Vertex, watsonx, etc.); passes with a neutral score when no guardrails metadata is present.' },
   { key: 'assert-set', label: 'Assertion group (weighted)', description: 'Nested group of sub-assertions, each optionally weighted, combined into one weighted-average score compared against a threshold.' },
+  { key: 'perplexity', label: 'Perplexity', description: 'Passes when output perplexity (from the provider\'s own per-token logprobs) is at or under a threshold. Requires the openai-compatible provider\'s "requestLogprobs" config option enabled, and a model that actually returns logprobs.' },
+  { key: 'perplexity-score', label: 'Perplexity score', description: 'Like Perplexity, but reports a normalized 0-1 score (higher is better) instead of pass/fail against a raw perplexity value. Same requirements as Perplexity.' },
 ];
 
 const REDTEAM_PLUGINS = [

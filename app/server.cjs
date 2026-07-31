@@ -2010,6 +2010,33 @@ async function evaluateAssertion(output, assertion = {}, context = {}) {
     }
     case 'is-refusal':
       return refusalAssessment(actual);
+    case 'perplexity':
+    case 'perplexity-score': {
+      // Same math as real promptfoo's perplexity assertions (perplexity.ts): needs the
+      // provider's actual per-token logprobs, not an approximation — there's no honest local
+      // substitute, so this only works for providers whose adapter captures logProbs (openai-
+      // compatible, requesting `logprobs: true`). Matches promptfoo's own error message for
+      // providers that don't return them, rather than silently passing or faking a score.
+      const logProbs = context.providerResponse?.logProbs;
+      if (!Array.isArray(logProbs) || !logProbs.length) {
+        return {
+          pass: false,
+          score: 0,
+          error: `${assertionType} assertion does not support providers that do not return logProbs`,
+        };
+      }
+      const avgLogProb = logProbs.reduce((sum, value) => sum + value, 0) / logProbs.length;
+      const perplexity = Math.exp(-avgLogProb);
+      if (assertionType === 'perplexity') {
+        const threshold = assertion.threshold;
+        const pass = threshold === undefined ? true : perplexity <= threshold;
+        return { pass, score: pass ? 1 : 0, perplexity, reason: pass ? 'Assertion passed' : `Perplexity ${perplexity.toFixed(2)} is greater than threshold ${threshold}` };
+      }
+      const perplexityNorm = 1 / (1 + perplexity);
+      const threshold = assertion.threshold;
+      const pass = threshold === undefined ? true : perplexityNorm >= threshold;
+      return { pass, score: perplexityNorm, perplexity, reason: pass ? 'Assertion passed' : `Perplexity score ${perplexityNorm.toFixed(2)} is less than threshold ${threshold}` };
+    }
     case 'guardrails': {
       const guardrails = context.providerResponse?.rawResponse?.guardrails;
       if (!guardrails) {
@@ -2234,12 +2261,28 @@ async function mapLimit(items, limit, iterator, shouldStop) {
   return results.filter(Boolean);
 }
 
-async function callOpenAICompatible({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens }) {
+async function callOpenAICompatible({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens, libraryConfig }) {
   if (!baseUrl) {
     throw new Error('Provider base URL is required for direct eval execution');
   }
   if (!model) {
     throw new Error('Model name is required for direct eval execution');
+  }
+  // Real promptfoo's own OpenAI provider only sends `logprobs` when explicitly opted in
+  // (`callApiOptions.includeLogProbs`), never unconditionally — confirmed the hard way: some
+  // OpenAI-compatible providers (Groq's llama-3.1-8b-instant, at minimum) reject the request
+  // outright with `logprobs is not supported with this model` when the field is present at
+  // all, which would silently break every eval call against that provider, not just
+  // perplexity assertions. Opt in per provider via the same `libraryConfig` JSON field already
+  // used for graphql/websocket/browser's extra config — no new DB/API surface needed.
+  let requestLogprobs = false;
+  if (libraryConfig) {
+    try {
+      const parsed = typeof libraryConfig === 'string' ? JSON.parse(libraryConfig) : libraryConfig;
+      requestLogprobs = Boolean(parsed?.requestLogprobs);
+    } catch {
+      /* invalid JSON in libraryConfig — ignore, same as other adapters' tolerant parsing */
+    }
   }
   const response = await fetch(`${String(baseUrl).replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
@@ -2255,6 +2298,7 @@ async function callOpenAICompatible({ baseUrl, model, apiKey, systemPrompt, prom
       ],
       temperature,
       max_tokens: maxTokens,
+      ...(requestLogprobs ? { logprobs: true } : {}),
     }),
   });
   const bodyText = await response.text();
@@ -2268,10 +2312,15 @@ async function callOpenAICompatible({ baseUrl, model, apiKey, systemPrompt, prom
     throw new Error(body.error?.message || bodyText || `HTTP ${response.status}`);
   }
   const choice = body.choices?.[0] || {};
+  // Same extraction real promptfoo's OpenAI provider uses (openai/chat.ts): a flat array of
+  // per-token logprobs from `choices[0].logprobs.content[].logprob`, undefined when the
+  // provider didn't return any (e.g. it silently ignored the `logprobs` request param).
+  const logProbs = choice.logprobs?.content?.map((entry) => entry.logprob);
   return {
     output: choice.message?.content ?? choice.text ?? body.output ?? '',
     tokenUsage: body.usage || null,
     finishReason: choice.finish_reason || choice.finishReason || null,
+    logProbs,
     rawResponse: body,
   };
 }
