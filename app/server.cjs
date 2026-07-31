@@ -1040,6 +1040,11 @@ function buildEvalTests(target) {
   // imported config's defaultTest vars silently never take effect for eval runs.
   const defaultVars = target.metadata?.redteam?.defaultTest?.vars;
   const baseVars = defaultVars && typeof defaultVars === 'object' ? defaultVars : {};
+  // Same rationale as defaultTest.vars above: promptfoo's defaultTest.assert applies to every
+  // test in addition to that test's own assertions (all must pass) -- not just redteam probes.
+  const baseAssertions = Array.isArray(target.metadata?.redteam?.defaultTest?.assert)
+    ? target.metadata.redteam.defaultTest.assert
+    : [];
   const cases = Array.isArray(evalConfig.testCases) ? evalConfig.testCases : [];
   if (cases.length) {
     return cases.map((testCase) => ({
@@ -1049,7 +1054,7 @@ function buildEvalTests(target) {
         ...(testCase.vars && typeof testCase.vars === 'object' ? testCase.vars : {}),
         [evalConfig.injectVar || 'prompt']: testCase.input || '',
       },
-      assert: normalizeAssertions(testCase.assertions, testCase.assertion, testCase.expected),
+      assert: [...baseAssertions, ...normalizeAssertions(testCase.assertions, testCase.assertion, testCase.expected)],
       metadata: testCase.metadata || undefined,
       options: testCase.transform ? { transform: testCase.transform } : undefined,
     }));
@@ -4918,6 +4923,11 @@ app.patch('/api/targets/:id/stages/:stageKey/config', requireAuth, requireAdmin,
                   .filter(([key]) => key),
               )
             : existingRedteam.defaultTest?.vars || {},
+        assert: Array.isArray(body.defaultTest?.assert)
+          ? body.defaultTest.assert
+              .map((assertion) => ({ type: String(assertion.type || 'contains').trim(), value: String(assertion.value ?? '') }))
+              .filter((assertion) => assertion.type)
+          : existingRedteam.defaultTest?.assert || [],
       },
       entities: body.entities !== undefined ? asArray(body.entities) : asArray(existingRedteam.entities),
       customProbes: Array.isArray(body.customProbes)

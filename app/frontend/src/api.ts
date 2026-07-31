@@ -166,6 +166,7 @@ export interface RedTeamStageConfigPayload {
   };
   defaultTest?: {
     vars: Record<string, string>;
+    assert?: Array<{ type: string; value: string }>;
   };
   entities: string[];
   customProbes?: Array<{

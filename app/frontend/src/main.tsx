@@ -1879,6 +1879,11 @@ function RedTeamWorkspace({
   const [timeoutMs, setTimeoutMs] = useState(Number(redteamRunOptions.timeoutMs || 30000));
   const [verbose, setVerbose] = useState(Boolean(redteamRunOptions.verbose));
   const [defaultVarRows, setDefaultVarRows] = useState<KeyValueRow[]>(() => keyValueRowsFromRecord(redteam.defaultTest?.vars));
+  const [defaultAssertRows, setDefaultAssertRows] = useState<Array<{ type: string; value: string }>>(
+    Array.isArray(redteam.defaultTest?.assert) && redteam.defaultTest.assert.length
+      ? redteam.defaultTest.assert
+      : [],
+  );
   const [entities, setEntities] = useState((redteam.entities || []).join(', '));
   const [dataClassification, setDataClassification] = useState(runtime.dataClassification || '');
   const [allowedTools, setAllowedTools] = useState((runtime.allowedTools || []).join(', '));
@@ -1924,6 +1929,10 @@ function RedTeamWorkspace({
     setDefaultVarRows((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   }
 
+  function updateDefaultAssert(index: number, patch: Partial<{ type: string; value: string }>) {
+    setDefaultAssertRows((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
   async function saveConfig() {
     if (isViewer) return false;
     setError('');
@@ -1944,6 +1953,7 @@ function RedTeamWorkspace({
       },
       defaultTest: {
         vars: keyValueRowsToRecord(defaultVarRows),
+        assert: defaultAssertRows.filter((row) => row.type),
       },
       entities: parseInlineList(entities),
       customProbes: customProbes.filter((probe) => probe.prompt.trim()),
@@ -2120,6 +2130,47 @@ function RedTeamWorkspace({
             </div>
           ) : (
             <p className="muted">No default variables configured.</p>
+          )}
+        </section>
+
+        <section className="subpanel">
+          <div className="subpanel-head">
+            <div>
+              <h3>Default test assertions</h3>
+              <p className="muted">Checked on every test case in both Eval and Red team runs, in addition to that case's own assertions — all must pass.</p>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setDefaultAssertRows((current) => [...current, { type: 'contains', value: '' }])}
+            >
+              Add assertion
+            </button>
+          </div>
+          {defaultAssertRows.length ? (
+            <div className="key-value-list">
+              {defaultAssertRows.map((row, index) => (
+                <div className="assertion-row" key={index}>
+                  <select value={row.type} onChange={(event) => updateDefaultAssert(index, { type: event.target.value })}>
+                    {(workflowCatalog.assertions.length ? workflowCatalog.assertions : [{ key: 'contains', label: 'Contains' }]).map((assertionType) => (
+                      <option value={assertionType.key} key={assertionType.key}>
+                        {assertionType.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input value={row.value} onChange={(event) => updateDefaultAssert(index, { value: event.target.value })} placeholder={assertionHelp(row.type)} />
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    onClick={() => setDefaultAssertRows((current) => current.filter((_row, i) => i !== index))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">No default assertions configured.</p>
           )}
         </section>
 

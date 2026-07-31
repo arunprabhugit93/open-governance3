@@ -1559,3 +1559,47 @@ this loop, not an unlimited test double.
       the failure mode is the real provider's own, same standard used
       for Databricks in iteration 9. Deleted the disposable target
       afterward.
+
+48. Same iteration, second fix: closed the `.vars`-only half of the gap
+    from item 45 by wiring `defaultTest.assert` — real promptfoo's
+    default-assertions-applied-to-every-test config, which was
+    explicitly left out of the earlier fix because the stored schema and
+    UI only had a `.vars` shape.
+    - Extended the `redteam.defaultTest` shape (both storage in
+      `PATCH .../stages/red_team/config` and the `RedTeamStageConfigPayload`
+      frontend type) to also carry `assert: Array<{type, value}>`, using
+      the same non-destructive partial-update pattern already fixed
+      elsewhere this session (`assert` falls back to the existing stored
+      value when the caller's body omits it, not to `[]`).
+    - `buildEvalTests` now prepends `redteam.defaultTest.assert` to every
+      eval test case's own assertion array (`[...baseAssertions,
+      ...testOwnAssertions]`) — matching real promptfoo semantics: the
+      default assertions run *in addition to* the test's own, and ALL
+      must pass, not either/or.
+    - Added a "Default test assertions" editor to the Red-team
+      workspace's UI, directly under the existing "Default test
+      variables" section it already sits next to — reused the exact
+      assertion-row pattern (type dropdown sourced from
+      `workflowCatalog.assertions`, value input, add/remove) already
+      used for per-test-case assertions in the Eval workspace, so no new
+      UI pattern was invented.
+    - Verified live against the real E2E reference target (both configs
+      captured before, restored after): set
+      `defaultTest.assert = [{type: 'contains', value: 'READY'}]`, then
+      ran two real eval test cases against the live Groq target, each
+      with only a trivial `min-length: 1` assertion of their own — one
+      prompted to reply "READY" (passed: both the default `contains`
+      check and the test's own check passed), one prompted to reply
+      "NOTHERE" (failed: the test's own `min-length` assertion still
+      passed on its own, but the row correctly failed overall because
+      the *default* `contains READY` assertion failed) — proving the
+      default assertion is genuinely enforced in addition to, not
+      instead of, each test's own checks. Also reran the target's
+      original baseline config unchanged afterward to confirm no
+      regression (still 1/1 pass). Cleaned up all test runs; restoring
+      the red-team config needed one extra step beyond the usual
+      capture-before/restore-after pattern — the original snapshot
+      predated the `.assert` field entirely, so the non-destructive PATCH
+      (correctly) preserved the just-set test value instead of clearing
+      it; had to explicitly PATCH `assert: []` to actually restore the
+      target to its true original state.
