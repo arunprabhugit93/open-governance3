@@ -1187,3 +1187,22 @@ smaller cosmetic changes for their own sake.
       all 5. Repeated a smaller version of the same check against an
       eval-stage run. Cleaned up every test run created during this
       verification before finishing.
+
+## Note — Groq TPM rate limiting from this session's own test traffic
+
+While verifying compare-runs (iteration 24, no code change — the
+feature checked out correct), a real Groq `429` (tokens-per-minute
+rate limit) showed up mid-test, initially looking like a bug (3 rows
+in a freshly-created run had unexpectedly failed). Traced it to the
+actual cause: 24 iterations of live-testing against the same Groq key
+this session has been consuming real TPM budget, and the account's
+free-tier limit (6000 TPM) got hit organically. Not a product defect —
+confirmed by reading the real Groq error message stored in the row's
+`error` field, and separately confirmed the compare/delta logic itself
+was reporting the state change correctly. Going forward, prefer
+lighter-weight checks (list-endpoint 200s, code reading, targeted SQL
+fixtures like the rerun/compare tests above) over triggering new live
+runs against the shared Groq key when verifying something that doesn't
+specifically need a fresh real model response — the reference target's
+own key is a shared, rate-limited resource across every iteration of
+this loop, not an unlimited test double.
