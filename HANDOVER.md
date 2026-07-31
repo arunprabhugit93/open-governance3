@@ -1278,3 +1278,40 @@ this loop, not an unlimited test double.
       hidden (that part already worked); signed back in as admin and
       confirmed the badge is correctly absent. Deleted the test user
       before finishing.
+
+## Change log — iteration 26 (verified malformed-import handling + added dataset deletion)
+
+41. Verified malformed-config import handling: posted deliberately
+    broken YAML (bad indentation, mixed tabs) to `/api/targets/import`
+    and confirmed a clean 400 with a specific, readable parse error —
+    no crash, no silent fallback. No bug, no change needed.
+
+42. Found a genuine missing capability while checking the Datasets
+    feature (saved/versioned eval test-case sets) end to end for the
+    first time this session: there was no way to delete a saved
+    dataset version, neither a backend route nor a frontend button —
+    each "Save version" click adds a new row to `target_datasets`
+    with no way to prune old ones, so they'd accumulate indefinitely
+    for any actively-iterated target. Confirmed this was a genuinely
+    absent capability, not a broken existing one (no misleading button
+    sitting there failing).
+    - Added `DELETE /api/targets/:id/datasets/:datasetId` — plain
+      delete, no special-casing for the currently-active dataset,
+      because activation already copies rows into
+      `metadata.eval.testCases` at the moment it runs (verified by
+      reading the activate route again) — eval execution never re-reads
+      `target_datasets`, so deleting a row (even the active one) only
+      removes it from the saved-version list, it can't break a live
+      eval config.
+    - `deleteDataset()` in `api.ts`, a `window.confirm`-gated "Delete"
+      button next to "Use" on each dataset row in the Eval workspace's
+      Datasets panel, matching the confirm-dialog pattern already
+      applied to every other destructive action this session.
+    - Verified live end to end: created a real dataset (2 rows) on a
+      throwaway config, confirmed it listed, activated it and
+      confirmed the target's `eval.testCases` actually swapped to the
+      new rows while `eval.providers` stayed untouched, restored the
+      original test case, deleted the dataset via the new route, and
+      confirmed the datasets list correctly went back to empty. No
+      regression to the live Groq target's own provider check
+      afterward.

@@ -5671,6 +5671,20 @@ app.post('/api/targets/:id/datasets/:datasetId/activate', requireAuth, requireAd
   }
 });
 
+// Safe to delete even the active dataset: activation copies rows into
+// metadata.eval.testCases at the time it runs (see the route above), so eval execution never
+// re-reads target_datasets — deleting a row just removes it from history, it can't break a run.
+app.delete('/api/targets/:id/datasets/:datasetId', requireAuth, requireAdmin, async (req, res) => {
+  const deleted = await pool.query(
+    'delete from target_datasets where target_id = $1 and id = $2 returning id',
+    [req.params.id, req.params.datasetId],
+  );
+  if (!deleted.rows.length) {
+    return res.status(404).json({ error: 'Dataset not found' });
+  }
+  res.status(204).send();
+});
+
 app.get('/api/targets/:id/report', requireAuth, async (req, res) => {
   const report = await buildTargetReportPayload(req.params.id);
   if (!report) {

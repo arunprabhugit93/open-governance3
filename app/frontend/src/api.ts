@@ -510,6 +510,10 @@ export function activateDataset(
   );
 }
 
+export function deleteDataset(token: string, id: string, datasetId: string): Promise<void> {
+  return request<void>(`/api/targets/${id}/datasets/${datasetId}`, token, { method: 'DELETE' });
+}
+
 export interface TargetSchedulePayload {
   name: string;
   stageKeys: Array<'eval' | 'red_team' | 'model_audit'>;

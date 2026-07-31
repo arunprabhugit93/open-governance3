@@ -6,6 +6,7 @@ import {
   cancelTargetRun,
   createSchedule,
   createDataset,
+  deleteDataset,
   deleteSchedule,
   deleteTarget,
   deleteTargetRun,
@@ -1318,6 +1319,21 @@ function EvalWorkspace({
     }
   }
 
+  async function deleteSavedDataset(datasetId: string, name: string) {
+    if (!window.confirm(`Delete "${name}"? This only removes the saved version — it won't affect the eval config if this version is currently active.`)) {
+      return;
+    }
+    setError('');
+    setMessage('');
+    try {
+      await deleteDataset(token, detail.target.id, datasetId);
+      await loadDatasets();
+      setMessage('Dataset version deleted.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to delete dataset');
+    }
+  }
+
   return (
     <div className="eval-builder">
       <div className="eval-builder-main">
@@ -1710,6 +1726,9 @@ function EvalWorkspace({
                   </div>
                   <button className="secondary-button" type="button" onClick={() => activateSavedDataset(dataset.id)} disabled={dataset.active}>
                     Use
+                  </button>
+                  <button className="danger-button" type="button" onClick={() => deleteSavedDataset(dataset.id, `${dataset.name} v${dataset.version}`)}>
+                    Delete
                   </button>
                 </div>
               ))
