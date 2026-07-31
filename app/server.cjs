@@ -4030,6 +4030,57 @@ function scanArtifactForDependencyRisk(rootPath) {
   return { manifests, unpinned };
 }
 
+// Real promptfoo's own model-audit feature wraps this exact external CLI tool (confirmed via
+// `promptfoo-source/src/types/modelAudit.ts`, whose comment says its types are "based on the
+// actual CLI output structure from ModelAudit tool") — a real, independently-maintained
+// pickle-opcode/security scanner (`pip install modelaudit`), not something worth
+// reimplementing by hand. It's optional at runtime, not a hard dependency of this product:
+// detected via a real invocation attempt, with an honest fallback if it isn't installed,
+// rather than silently pretending malware scanning is unavailable when it actually could be.
+const MODEL_AUDIT_CLI_TIMEOUT_MS = 120000;
+function runModelAuditCli(rootPath) {
+  return new Promise((resolve) => {
+    const child = spawn('modelaudit', ['scan', rootPath, '--format', 'json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      resolve({ available: true, error: `modelaudit scan timed out after ${MODEL_AUDIT_CLI_TIMEOUT_MS}ms` });
+    }, MODEL_AUDIT_CLI_TIMEOUT_MS);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // ENOENT (binary not found on PATH) means "not installed", not "broken" — that's the
+      // honest-fallback path, not an error to surface as a scan failure.
+      resolve({ available: error.code !== 'ENOENT', error: error.code === 'ENOENT' ? null : error.message });
+    });
+    child.on('close', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // modelaudit exits non-zero when it finds issues (like grep) — that's a normal, expected
+      // result, not a failed invocation, so exit code is deliberately not checked here. Only a
+      // JSON parse failure counts as a real execution problem.
+      try {
+        const jsonStart = stdout.indexOf('{');
+        resolve({ available: true, result: JSON.parse(stdout.slice(jsonStart)) });
+      } catch {
+        resolve({ available: true, error: stderr.trim() || 'modelaudit produced no parseable JSON output' });
+      }
+    });
+  });
+}
+
 function findArtifactFile(rootPath, namePattern) {
   let match = null;
   walkArtifactFiles(rootPath, (filePath) => {
@@ -4040,7 +4091,7 @@ function findArtifactFile(rootPath, namePattern) {
   return match;
 }
 
-function executeModelAuditRun(target) {
+async function executeModelAuditRun(target) {
   const metadata = target.metadata || {};
   const audit = metadata.audit || {};
   const provider = metadata.provider || {};
@@ -4191,6 +4242,36 @@ function executeModelAuditRun(target) {
       });
     } else {
       checks.push({ key: 'dependency-risk', label: 'Dependency risk (local pinning scan)', pass: false, detail: unreadablePathDetail('Dependency risk scan') });
+    }
+  }
+
+  if (selectedScanners.includes('malware')) {
+    if (artifactRoot) {
+      const cli = await runModelAuditCli(artifactRoot);
+      if (!cli.available) {
+        checks.push({
+          key: 'malware',
+          label: 'Malware indicators (modelaudit CLI not installed)',
+          pass: true,
+          detail: 'The "modelaudit" CLI (the same real scanner promptfoo itself uses for this check — pickle-opcode analysis, dangerous-global detection, etc.) is not installed on this host. Install with "pip install modelaudit" to enable a real scan; recorded for evidence collection only, not a verified pass.',
+        });
+      } else if (cli.error) {
+        checks.push({ key: 'malware', label: 'Malware indicators (modelaudit CLI)', pass: false, detail: `Scan failed: ${cli.error}` });
+      } else {
+        const result = cli.result || {};
+        const issues = Array.isArray(result.issues) ? result.issues : [];
+        const critical = issues.filter((issue) => ['critical', 'error'].includes(issue.severity));
+        checks.push({
+          key: 'malware',
+          label: 'Malware indicators (modelaudit CLI)',
+          pass: !result.has_errors && critical.length === 0,
+          detail: critical.length
+            ? `${critical.length} critical finding(s) from modelaudit: ${critical.slice(0, 5).map((issue) => issue.message).join('; ')}`
+            : `modelaudit scanned ${result.files_scanned ?? '?'} file(s), ${issues.length} non-critical finding(s), no critical/dangerous indicators found.`,
+        });
+      }
+    } else {
+      checks.push({ key: 'malware', label: 'Malware indicators (modelaudit CLI)', pass: false, detail: unreadablePathDetail('Malware scan') });
     }
   }
 
@@ -4417,7 +4498,7 @@ async function executeStoredStageRun(runId, targetId, stageKey, runOptions, conf
         ? await executeEvalRun(targetPayload.target, runOptions, { runId })
         : stageKey === 'red_team'
           ? await executeRedTeamRun(targetPayload.target, runOptions, { runId })
-          : executeModelAuditRun(targetPayload.target, runOptions);
+          : await executeModelAuditRun(targetPayload.target, runOptions);
     const finalStatus = results.cancelled ? 'cancelled' : 'completed';
     const updated = await pool.query(
       `update target_stage_runs

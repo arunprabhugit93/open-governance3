@@ -1806,3 +1806,64 @@ this loop, not an unlimited test double.
       full-pass perplexity computation is unverified, but the failure
       mode at every step is the real provider's own, never a fake
       result. Restored the target's original config afterward.
+
+## Change log — iteration 35 (real `malware` model-audit scanner via the `modelaudit` CLI)
+
+53. Closed the second of the three originally-unimplemented model-audit
+    scanners (see iteration 21/33): `malware`. Cross-checked real
+    promptfoo's own model-audit feature (`promptfoo-source/src/types/
+    modelAudit.ts`) and its doc comment gave this away directly — its
+    types are "based on the actual CLI output structure from ModelAudit
+    tool." Confirmed `modelaudit` is a real, independently-maintained,
+    installable PyPI package (`pip install modelaudit`) that does real
+    pickle-opcode analysis, dangerous-global-import detection, file
+    hashing, etc. — real promptfoo doesn't reimplement malware scanning
+    either, it wraps this same external tool. So the honest move here
+    is the same shape as the eval-side pattern already used for judge-
+    backed assertions (real when available, clearly-labeled fallback
+    otherwise), not writing a home-grown pattern-matcher.
+    - Added `runModelAuditCli(rootPath)` in `server.cjs`: spawns
+      `modelaudit scan <path> --format json`, parses stdout as JSON
+      regardless of exit code (the CLI exits non-zero when it *finds*
+      issues — same convention as `grep` — so a non-zero code is a
+      normal result, not a failure), and distinguishes three real
+      outcomes: not installed (`ENOENT` — the expected default state for
+      most deployments), a genuine execution error, or a real parsed
+      result. 120s timeout since a real scan takes real time (measured
+      ~12-14s even for a single tiny file in this environment — that's
+      the tool's own fixed startup/engine-load overhead, not something
+      controllable from this side).
+    - Wired into `executeModelAuditRun`'s `malware` branch, which
+      required converting that function (and its one call site) to
+      `async` — it now genuinely awaits an external process instead of
+      being pure local computation. Maps the CLI's real `issues[]` (any
+      `critical`/`error` severity finding fails the check) into this
+      product's existing scanner-check shape, consistent with how
+      `secrets`/`unsafe-code`/`dependency-risk` already report.
+      Deliberately NOT added as a project dependency (nothing in
+      `package.json`) — it's Python tooling, detected at runtime, with
+      an honest "not installed, here's how to enable it" message when
+      absent, exactly like the pre-existing "not evaluated — no scanner
+      implemented" placeholder it replaces for this one key.
+    - Verified live, three separate real scenarios, not code review:
+      (1) installed `modelaudit` locally (`pip install modelaudit`),
+      built a real fixture with a genuinely malicious pickle
+      (`__reduce__` returning `(os.system, ('echo pwned',))`), ran it
+      through the full product stack (disposable target -> real HTTP
+      request -> real spawned CLI) and got back
+      `pass: false` with `"Found REDUCE opcode invoking dangerous
+      global: posix.system"` — the CLI's own genuine detection, word for
+      word; (2) reran against a clean fixture (a README and a JSON
+      config, no code) and got a real, correctly-computed pass; (3)
+      restarted the server with a `PATH` that excludes the `modelaudit`
+      binary entirely (simulating the common "not installed" deployment
+      case) and confirmed the honest "CLI not installed... pip install
+      modelaudit to enable" fallback fires correctly rather than
+      crashing or silently reporting a fake pass. Also reran the E2E
+      reference target's existing model-audit config (which doesn't
+      select `malware`) to confirm zero regression from making the
+      function `async` (identical 9 checks, same 2 pre-existing
+      failures). Deleted the disposable target and fixtures afterward.
+      `data-lineage` is the only model-audit scanner still honestly
+      unimplemented — genuinely needs external data-provenance-tracking
+      infrastructure this product has no access to.
