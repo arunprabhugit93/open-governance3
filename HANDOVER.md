@@ -1251,3 +1251,30 @@ this loop, not an unlimited test double.
     kill -9` instead of `pkill -f`** — it kills whatever is actually
     bound to the port regardless of how the path was spelled when it
     launched, which is the property that actually matters.
+
+40. Checked whether the UI adapts at all for viewer-role accounts
+    (RBAC itself was already correctly enforced server-side — every
+    mutating route already 403s for viewers, verified in earlier E2E
+    passes). It doesn't: a viewer sees the exact same buttons an admin
+    does — Run eval, Save config, Delete target (with the new
+    confirmation dialog promising cascading deletion), Create
+    schedule, all of it — and only finds out they can't actually do
+    any of it when the click fails with a generic 403. Fully disabling
+    or hiding every admin-only control across every workspace
+    (Eval/RedTeam/ModelAudit/Evidence, each a separate component) would
+    be a large, invasive change for this pass, so scoped this to the
+    highest-leverage fix instead: a persistent "Viewer (read-only)"
+    badge in the topbar, shown whenever `isAdmin === false` (the
+    strict equality matters — `undefined` during the brief loading
+    state before `user` resolves must NOT show it prematurely). Turns
+    "confusing 403 with zero context" into "confusing 403, but I was
+    warned upfront this might happen" — real improvement, not a full
+    fix for the underlying gap (individual buttons still aren't
+    disabled), noted here so a future pass can pick up the rest if it
+    turns out to matter in practice.
+    - Verified live: created a real throwaway viewer-role user via the
+      Users page, signed in as them in the browser, confirmed the
+      badge renders and "Users"/"API tokens" nav links correctly stay
+      hidden (that part already worked); signed back in as admin and
+      confirmed the badge is correctly absent. Deleted the test user
+      before finishing.

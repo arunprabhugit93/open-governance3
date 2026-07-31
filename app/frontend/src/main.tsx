@@ -301,6 +301,11 @@ function Shell({
             <p className="eyebrow">Open Governance</p>
             <p className="topbar-title">Assurance control plane</p>
           </div>
+          {isAdmin === false ? (
+            <span className="badge viewer-badge" title="Viewer accounts can browse everything but can't run, save, or delete anything — those actions will be blocked.">
+              Viewer (read-only)
+            </span>
+          ) : null}
         </div>
         <div className="topbar-actions">
           <button className="secondary-button" type="button" onClick={onRegistry}>

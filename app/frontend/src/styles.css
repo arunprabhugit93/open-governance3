@@ -455,6 +455,14 @@ h3 {
   font-weight: 800;
 }
 
+.viewer-badge {
+  background: #fff4e5;
+  color: #92610d;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  cursor: help;
+}
+
 .plan {
   display: grid;
   gap: 8px;
