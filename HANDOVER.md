@@ -1206,3 +1206,48 @@ runs against the shared Groq key when verifying something that doesn't
 specifically need a fresh real model response — the reference target's
 own key is a shared, rate-limited resource across every iteration of
 this loop, not an unlimited test double.
+
+## Change log — iteration 25 (session-expiry redirect + a restart-procedure bug)
+
+38. Found a real UX gap: a 401 anywhere in the app *other than* the
+    initial post-login data load just surfaced as a generic
+    "Unauthorized" error in whatever component happened to be open —
+    the 12-hour session JWT expiring mid-use (or an admin revoking it)
+    left the user stuck looking at a normal-looking but silently-dead
+    UI, with every subsequent click failing the same way, until they
+    manually clicked Sign out themselves. Fixed centrally rather than
+    at each of the ~40 call sites: `request()`/`requestText()` in
+    `api.ts` now clear the stored token and fire a `window.
+    dispatchEvent(new Event('og:session-expired'))` on any 401 that
+    was carrying a token (a 401 with *no* token, e.g. a wrong-password
+    login attempt, is a different case and is deliberately left
+    alone). `App()` in `main.tsx` listens for that event and resets to
+    the login screen with "Your session expired. Please sign in
+    again." — the same recovery path the initial-load failure already
+    had, just reachable from anywhere now instead of only from the
+    first load after opening the app.
+
+39. **Found and fixed a real bug in my own iteration process**, not
+    the product: `pkill -f "node app/server.cjs"` (a relative-path
+    pattern) stopped matching once a restart in iteration 23 happened
+    to launch the process with an absolute path
+    (`node /Users/.../app/server.cjs`) — the substring "node
+    app/server.cjs" isn't present in that command line even though
+    "app/server.cjs" is. Every "restart" after that point silently
+    launched a *new* node process that failed to bind (port already
+    held) while the old, increasingly-stale process kept serving every
+    live-verification test. Confirmed on investigation: `lsof -i
+    :18080` showed the actual listener was a process 2+ minutes older
+    than the iteration-23 commit, with two more orphaned,
+    never-bound-to-anything node processes idle in the background.
+    Given the ambiguity about exactly which commits got verified
+    against genuinely fresh code, **re-verified the iteration-23
+    rerun-scoping fix from scratch** after cleaning up (killed
+    everything actually bound to the port via `lsof -ti :18080 |
+    xargs kill -9` rather than trying to pattern-match a command line
+    again, confirmed exactly one process listening, then re-ran the
+    same forced-failure SQL-fixture test) — it's genuinely correct and
+    active. **Going forward, restart with `lsof -ti :18080 | xargs -r
+    kill -9` instead of `pkill -f`** — it kills whatever is actually
+    bound to the port regardless of how the path was spelled when it
+    launched, which is the property that actually matters.

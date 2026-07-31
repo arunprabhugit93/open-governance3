@@ -4314,6 +4314,24 @@ function App() {
     });
   }, [token]);
 
+  // A 401 anywhere in the app (not just the initial load above) fires this — e.g. the 12h
+  // session JWT expiring while the user is mid-action on some other screen. Without this,
+  // every subsequent click would fail with the same generic "Unauthorized" error in whatever
+  // component happened to be open, with no indication of why or how to recover.
+  useEffect(() => {
+    function handleSessionExpired() {
+      setToken(null);
+      setUser(null);
+      setCatalog(null);
+      setTargets([]);
+      setDetail(null);
+      routedRef.current = false;
+      setLoginError('Your session expired. Please sign in again.');
+    }
+    window.addEventListener('og:session-expired', handleSessionExpired);
+    return () => window.removeEventListener('og:session-expired', handleSessionExpired);
+  }, []);
+
   // Apply whatever route is in the URL once on load — supports refresh and shared/bookmarked links.
   useEffect(() => {
     if (!catalog || routedRef.current) return;

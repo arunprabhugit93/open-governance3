@@ -190,6 +190,18 @@ export interface ModelAuditStageConfigPayload {
   notes: string;
 }
 
+// A 401 on a request that *was* carrying a token means the session expired or was revoked
+// server-side mid-use (session JWTs last 12h) — not a login failure, which is a 401 with no
+// token at all. Every screen in the app calls through here or requestText, so handling it once
+// centrally means a stale session redirects to sign-in instead of leaving every action on
+// every page failing with the same confusing generic error until the user manually signs out.
+function handleExpiredSession(token: string | null) {
+  if (!token) return;
+  localStorage.removeItem('og_token');
+  localStorage.removeItem('og_user');
+  window.dispatchEvent(new Event('og:session-expired'));
+}
+
 async function request<T>(path: string, token: string | null, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...options,
@@ -201,6 +213,7 @@ async function request<T>(path: string, token: string | null, options: RequestIn
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401) handleExpiredSession(token);
     throw new ApiError(payload.error || `Request failed with HTTP ${response.status}`);
   }
   return payload as T;
@@ -214,6 +227,7 @@ async function requestText(path: string, token: string): Promise<string> {
   });
   const text = await response.text();
   if (!response.ok) {
+    if (response.status === 401) handleExpiredSession(token);
     try {
       const payload = JSON.parse(text);
       throw new ApiError(payload.error || `Request failed with HTTP ${response.status}`);
