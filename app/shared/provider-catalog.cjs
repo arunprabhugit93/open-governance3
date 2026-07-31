@@ -120,6 +120,7 @@ const PROMPTFOO_LIBRARY_PROVIDERS = {
   'mcp-server': 'mcp',
   fal: 'fal',
   voyage: 'voyage',
+  replicate: 'replicate',
 };
 for (const key of Object.keys(PROMPTFOO_LIBRARY_PROVIDERS)) {
   ADAPTER_BY_PROVIDER[key] = 'promptfoo-library';

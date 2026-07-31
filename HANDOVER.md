@@ -1519,3 +1519,43 @@ this loop, not an unlimited test double.
       register on the login button — confirmed it was a tool-side issue,
       not a regression, by dispatching a real `form.requestSubmit()` via
       JS, which worked immediately and logged in correctly.)
+
+## Change log — iteration 30 (Replicate provider, `/loop` continuation — refocused on core functionality)
+
+47. The user explicitly redirected priority away from roles/permissions
+    work and back to core functionality parity ("all i want now is to
+    complete all the functionlities and build the core engine rather
+    than multiple roles access and permission") — saved as a standing
+    memory so future iterations don't drift back toward RBAC polish.
+    Closed the next real gap from that lens: `Replicate` was the one
+    remaining catalog entry marked `(planned)`/non-executable. Confirmed
+    real promptfoo has a genuine `replicate:`-prefixed provider
+    (`promptfoo-source/src/providers/replicate.ts`, registered in
+    `registry.ts`), so — same as the 10 providers wired in iteration 9
+    (Bedrock, Vertex, watsonx, Databricks, Snowflake Cortex, Cloudflare
+    Workers AI, MCP, fal, Voyage) — this needed the real
+    `pf.loadApiProvider` bridge, not a hand-written HTTP adapter.
+    - One-line fix: added `replicate: 'replicate'` to
+      `PROMPTFOO_LIBRARY_PROVIDERS` in `app/shared/provider-catalog.cjs`.
+      `adapterForProvider('replicate')` now resolves to
+      `'promptfoo-library'` instead of `'adapter-required'`, which
+      automatically flips `executable: true` in the catalog API and
+      removes the `(planned)` suffix in the frontend dropdown (confirmed
+      that suffix is rendered dynamically off `item.executable`, not a
+      hardcoded string — no frontend change needed). Provider catalog is
+      now 55/55 executable, 0 remaining `(planned)` entries.
+    - Verified live, not just "no crash": created a disposable target,
+      configured a `replicate` provider with a fake API token, and hit
+      the real provider-test endpoint. Got back
+      `"Unsupported response from Replicate: undefined"` after a real
+      ~2.7s network round trip — confirmed by grepping
+      `promptfoo-source/src/providers/replicate.ts:317` that this exact
+      string is only ever emitted by the real vendored Replicate
+      provider's own response-parsing code, proving the bridge actually
+      reached Replicate's live API (and got rejected, as expected with a
+      fake token) rather than crashing or silently faking a pass. No
+      `REPLICATE_API_KEY` is available in this environment to test a
+      genuine 200, so a real successful generation is unverified — but
+      the failure mode is the real provider's own, same standard used
+      for Databricks in iteration 9. Deleted the disposable target
+      afterward.
