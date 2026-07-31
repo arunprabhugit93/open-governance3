@@ -1703,3 +1703,46 @@ this loop, not an unlimited test double.
       afterward. No more adapters have an "honest limitation" placeholder
       in native mode — all 11 direct-mode adapters now also work in
       native mode.
+
+## Change log — iteration 33 (real `dependency-risk` model-audit scanner)
+
+51. Closed one of the three remaining honestly-unimplemented model-audit
+    scanners (`malware`/`dependency-risk`/`data-lineage` — see iteration
+    21). `dependency-risk` genuinely has a real, useful, purely-local
+    check available: dependency-version *pinning*. A floating range
+    (`^4.17.21`, `*`, no version at all) means the next install can
+    silently pull in different, unreviewed, or compromised code without
+    the artifact itself changing — a real, well-known supply-chain risk
+    signal, distinct from (and not a substitute for) a live known-CVE
+    database lookup, which this self-hosted product genuinely has no
+    access to and won't fake.
+    - Added `scanArtifactForDependencyRisk(rootPath)` in `server.cjs`:
+      walks the artifact tree (reusing the existing `walkArtifactFiles`
+      helper the secrets/unsafe-code scanners already use) for
+      `package.json` and `requirements.txt`; flags any dependency whose
+      version range isn't pinned to an exact value (`^`/`~`/`*`/`x`/`||`
+      ranges or a missing version for npm, anything without `==` for
+      pip).
+    - Wired it into `executeModelAuditRun` following the exact same
+      pattern as the other real local scanners: gated on
+      `selectedScanners.includes('dependency-risk')`, a real fail when
+      the artifact path isn't readable (not a silent pass), and every
+      detail message ends with an explicit "This checks pinning only,
+      not a live CVE database" so a green result is never mistaken for
+      "no known vulnerabilities."
+    - Verified live with a real fixture, not just code review: a
+      `package.json` with one pinned (`express@4.18.2`) and two unpinned
+      (`lodash@^4.17.21`, `left-pad@*`) dependencies, plus a
+      `requirements.txt` with one pinned (`numpy==1.26.0`) and one
+      unpinned (`requests`, no version) — ran the real scan and got back
+      exactly the 3 expected unpinned entries, correctly excluding both
+      pinned ones. Then removed all unpinned entries from the fixture and
+      reran — got a clean pass listing the manifest checked. Also reran
+      the E2E reference target's existing model-audit config (which
+      doesn't select `dependency-risk`) to confirm the unrelated checks
+      are unaffected (same 9 checks, same 2 pre-existing failures as
+      before). Deleted the disposable target and fixture directory
+      afterward. `malware` and `data-lineage` remain honestly
+      unimplemented — genuinely need external malware-signature/data-
+      lineage-tracking infrastructure this product doesn't have, so
+      faking either would be dishonest rather than a real check.

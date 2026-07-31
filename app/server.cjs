@@ -3937,6 +3937,50 @@ function scanArtifactForUnsafeSerialization(rootPath) {
   return { flagged, safe };
 }
 
+// Real, but deliberately scoped: this checks dependency *pinning* (a genuine supply-chain
+// risk — a floating range can silently pull in new, unreviewed, or compromised code on the
+// next install), not known-CVE lookup, which would need a live vulnerability database this
+// self-hosted product has no access to. The label and detail text below are explicit about
+// that scope so a pass here is never mistaken for "no known vulnerabilities."
+function scanArtifactForDependencyRisk(rootPath) {
+  const manifests = [];
+  const unpinned = [];
+  walkArtifactFiles(rootPath, (filePath) => {
+    const base = path.basename(filePath);
+    const relative = path.relative(rootPath, filePath) || base;
+    if (base === 'package.json') {
+      manifests.push(relative);
+      try {
+        const pkg = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+        for (const [name, range] of Object.entries(deps)) {
+          const trimmed = String(range).trim();
+          if (!trimmed || /^[\^~*]|latest|x$/i.test(trimmed) || trimmed.includes('||')) {
+            unpinned.push(`${name}@${trimmed || '(empty)'} in ${relative}`);
+          }
+        }
+      } catch {
+        /* invalid/unreadable JSON — not scannable */
+      }
+    } else if (base === 'requirements.txt') {
+      manifests.push(relative);
+      try {
+        const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('-')) continue;
+          if (!trimmed.includes('==')) {
+            unpinned.push(`${trimmed} in ${relative}`);
+          }
+        }
+      } catch {
+        /* unreadable */
+      }
+    }
+  });
+  return { manifests, unpinned };
+}
+
 function findArtifactFile(rootPath, namePattern) {
   let match = null;
   walkArtifactFiles(rootPath, (filePath) => {
@@ -4080,6 +4124,24 @@ function executeModelAuditRun(target) {
           ? 'SBOM/MBOM required, but the artifact path is not a readable local file/directory, so it could not be verified.'
           : 'SBOM/MBOM requirement is not enabled.',
       });
+    }
+  }
+
+  if (selectedScanners.includes('dependency-risk')) {
+    if (artifactRoot) {
+      const { manifests, unpinned } = scanArtifactForDependencyRisk(artifactRoot);
+      checks.push({
+        key: 'dependency-risk',
+        label: 'Dependency risk (local pinning scan)',
+        pass: unpinned.length === 0,
+        detail: !manifests.length
+          ? 'No package.json or requirements.txt found under this path — nothing to check.'
+          : unpinned.length
+            ? `${unpinned.length} unpinned dependenc${unpinned.length === 1 ? 'y' : 'ies'} found (floating version ranges can silently pull in new, unreviewed code on the next install): ${unpinned.slice(0, 5).join('; ')}. This checks pinning only, not a live CVE database.`
+            : `Checked ${manifests.length} manifest(s) (${manifests.join(', ')}), all dependencies pinned to exact versions. This checks pinning only, not a live CVE database.`,
+      });
+    } else {
+      checks.push({ key: 'dependency-risk', label: 'Dependency risk (local pinning scan)', pass: false, detail: unreadablePathDetail('Dependency risk scan') });
     }
   }
 
