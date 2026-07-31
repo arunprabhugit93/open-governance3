@@ -400,6 +400,7 @@ function RegistryPage({
   targets,
   message,
   token,
+  isViewer,
   onOnboard,
   onSelect,
   onImported,
@@ -408,10 +409,12 @@ function RegistryPage({
   targets: OnboardedTarget[];
   message: string;
   token: string;
+  isViewer?: boolean;
   onOnboard: () => void;
   onSelect: (id: string) => void;
   onImported: (id: string) => Promise<void>;
 }) {
+  const viewerTitle = isViewer ? 'Viewer accounts cannot make changes' : undefined;
   const [importText, setImportText] = useState('');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
@@ -471,7 +474,7 @@ function RegistryPage({
             Select a target to continue into Eval, Red team, and Model audit preparation.
           </p>
         </div>
-        <button className="primary-button" type="button" onClick={onOnboard}>
+        <button className="primary-button" type="button" onClick={onOnboard} disabled={isViewer} title={viewerTitle}>
           Onboard a model
         </button>
       </div>
@@ -483,11 +486,11 @@ function RegistryPage({
             <p className="muted">Paste product export JSON or a Promptfoo YAML/JSON config.</p>
           </div>
           <div className="stage-actions">
-            <label className="secondary-link">
+            <label className={`secondary-link${isViewer ? ' disabled-link' : ''}`} title={viewerTitle}>
               Load file
-              <input type="file" accept=".json,.yaml,.yml,application/json,text/yaml" hidden onChange={handleImportFile} />
+              <input type="file" accept=".json,.yaml,.yml,application/json,text/yaml" hidden disabled={isViewer} onChange={handleImportFile} />
             </label>
-            <button className="secondary-button" type="button" disabled={!importText.trim() || importing} onClick={handleImport}>
+            <button className="secondary-button" type="button" disabled={isViewer || !importText.trim() || importing} title={viewerTitle} onClick={handleImport}>
               {importing ? 'Importing...' : 'Import config'}
             </button>
           </div>
@@ -941,6 +944,7 @@ function EvalWorkspace({
   providerGroups,
   workflowCatalog,
   evalRuns,
+  isViewer,
   onRefresh,
 }: {
   detail: TargetDetailResponse;
@@ -948,8 +952,10 @@ function EvalWorkspace({
   providerGroups: ProviderCatalogGroup[];
   workflowCatalog: WorkflowCatalogResponse;
   evalRuns: EvalRun[];
+  isViewer?: boolean;
   onRefresh: (updated: TargetDetailResponse) => void | Promise<void>;
 }) {
+  const viewerTitle = isViewer ? 'Viewer accounts cannot make changes' : undefined;
   const metadata = detail.target.metadata as Record<string, any>;
   const evalConfig = (metadata.eval || {}) as any;
   const providerDefaults = (metadata.provider || {}) as any;
@@ -1150,6 +1156,7 @@ function EvalWorkspace({
   }
 
   async function importPromptfooConfigIntoEval() {
+    if (isViewer) return;
     setError('');
     setMessage('');
     const text = configImportText.trim();
@@ -1173,6 +1180,7 @@ function EvalWorkspace({
   }
 
   async function saveConfig() {
+    if (isViewer) return false;
     setError('');
     setMessage('');
     try {
@@ -1246,7 +1254,7 @@ function EvalWorkspace({
   }
 
   async function cancelEval() {
-    if (!activeRunId) return;
+    if (isViewer || !activeRunId) return;
     setError('');
     setMessage('');
     try {
@@ -1288,6 +1296,7 @@ function EvalWorkspace({
   }, [activeRunId, detail.target.id, token]);
 
   async function saveDataset(active = false) {
+    if (isViewer) return;
     setError('');
     setMessage('');
     try {
@@ -1306,6 +1315,7 @@ function EvalWorkspace({
   }
 
   async function activateSavedDataset(datasetId: string) {
+    if (isViewer) return;
     setError('');
     setMessage('');
     try {
@@ -1320,6 +1330,7 @@ function EvalWorkspace({
   }
 
   async function deleteSavedDataset(datasetId: string, name: string) {
+    if (isViewer) return;
     if (!window.confirm(`Delete "${name}"? This only removes the saved version — it won't affect the eval config if this version is currently active.`)) {
       return;
     }
@@ -1498,7 +1509,8 @@ function EvalWorkspace({
                 <button
                   className="secondary-button"
                   type="button"
-                  disabled={providerTesting === index || provider.engine === 'adapter-required'}
+                  disabled={isViewer || providerTesting === index || provider.engine === 'adapter-required'}
+                  title={viewerTitle}
                   onClick={() => testProvider(index)}
                 >
                   {providerTesting === index ? 'Testing...' : 'Test provider'}
@@ -1686,7 +1698,8 @@ function EvalWorkspace({
             <button
               className="primary-button"
               type="button"
-              disabled={!configImportText.trim() || configImporting}
+              disabled={isViewer || !configImportText.trim() || configImporting}
+              title={viewerTitle}
               onClick={importPromptfooConfigIntoEval}
             >
               {configImporting ? 'Importing...' : 'Load into eval'}
@@ -1709,10 +1722,10 @@ function EvalWorkspace({
             <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} />
           </div>
           <div className="stage-actions">
-            <button className="secondary-button" type="button" onClick={() => saveDataset(false)}>
+            <button className="secondary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={() => saveDataset(false)}>
               Save version
             </button>
-            <button className="primary-button" type="button" onClick={() => saveDataset(true)}>
+            <button className="primary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={() => saveDataset(true)}>
               Save and use
             </button>
           </div>
@@ -1724,10 +1737,10 @@ function EvalWorkspace({
                     <strong>{dataset.name} v{dataset.version}</strong>
                     <p className="muted">{dataset.rows.length} cases · {dataset.active ? 'Active' : 'Inactive'}</p>
                   </div>
-                  <button className="secondary-button" type="button" onClick={() => activateSavedDataset(dataset.id)} disabled={dataset.active}>
+                  <button className="secondary-button" type="button" onClick={() => activateSavedDataset(dataset.id)} disabled={isViewer || dataset.active} title={viewerTitle}>
                     Use
                   </button>
-                  <button className="danger-button" type="button" onClick={() => deleteSavedDataset(dataset.id, `${dataset.name} v${dataset.version}`)}>
+                  <button className="danger-button" type="button" disabled={isViewer} title={viewerTitle} onClick={() => deleteSavedDataset(dataset.id, `${dataset.name} v${dataset.version}`)}>
                     Delete
                   </button>
                 </div>
@@ -1774,14 +1787,14 @@ function EvalWorkspace({
             </label>
           </div>
           <div className="stage-actions">
-            <button className="secondary-button" type="button" onClick={saveConfig}>
+            <button className="secondary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={saveConfig}>
               Save config
             </button>
-            <button className="primary-button" type="button" onClick={runEval} disabled={running}>
+            <button className="primary-button" type="button" onClick={runEval} disabled={isViewer || running} title={viewerTitle}>
               {running ? 'Running...' : 'Run eval'}
             </button>
             {activeRunId ? (
-              <button className="danger-button" type="button" onClick={cancelEval}>
+              <button className="danger-button" type="button" disabled={isViewer} title={viewerTitle} onClick={cancelEval}>
                 Cancel eval
               </button>
             ) : null}
@@ -1828,14 +1841,17 @@ function RedTeamWorkspace({
   token,
   workflowCatalog,
   runs,
+  isViewer,
   onRefresh,
 }: {
   detail: TargetDetailResponse;
   token: string;
   workflowCatalog: WorkflowCatalogResponse;
   runs: StageRun[];
+  isViewer?: boolean;
   onRefresh: (updated: TargetDetailResponse) => void | Promise<void>;
 }) {
+  const viewerTitle = isViewer ? 'Viewer accounts cannot make changes' : undefined;
   const metadata = detail.target.metadata as Record<string, any>;
   const redteam = (metadata.redteam || {}) as any;
   const runtime = (metadata.runtime || {}) as any;
@@ -1909,6 +1925,7 @@ function RedTeamWorkspace({
   }
 
   async function saveConfig() {
+    if (isViewer) return false;
     setError('');
     setMessage('');
     const payload: RedTeamStageConfigPayload = {
@@ -1984,7 +2001,7 @@ function RedTeamWorkspace({
   }
 
   async function cancelStage() {
-    if (!activeRunId) return;
+    if (isViewer || !activeRunId) return;
     setError('');
     setMessage('');
     try {
@@ -2317,17 +2334,17 @@ function RedTeamWorkspace({
             Debug mode
           </label>
           <div className="stage-actions">
-            <button className="secondary-button" type="button" onClick={saveConfig}>
+            <button className="secondary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={saveConfig}>
               Save config
             </button>
-            <button className="secondary-button" type="button" onClick={loadPlan} disabled={planning || !plugins.length || !strategies.length}>
+            <button className="secondary-button" type="button" onClick={loadPlan} disabled={isViewer || planning || !plugins.length || !strategies.length} title={viewerTitle}>
               {planning ? 'Generating...' : 'Preview plan'}
             </button>
-            <button className="primary-button" type="button" onClick={runStage} disabled={running || !plugins.length || !strategies.length}>
+            <button className="primary-button" type="button" onClick={runStage} disabled={isViewer || running || !plugins.length || !strategies.length} title={viewerTitle}>
               {running ? 'Running...' : 'Run red team'}
             </button>
             {activeRunId ? (
-              <button className="danger-button" type="button" onClick={cancelStage}>
+              <button className="danger-button" type="button" disabled={isViewer} title={viewerTitle} onClick={cancelStage}>
                 Cancel red team
               </button>
             ) : null}
@@ -2406,14 +2423,17 @@ function ModelAuditWorkspace({
   token,
   workflowCatalog,
   runs,
+  isViewer,
   onRefresh,
 }: {
   detail: TargetDetailResponse;
   token: string;
   workflowCatalog: WorkflowCatalogResponse;
   runs: StageRun[];
+  isViewer?: boolean;
   onRefresh: (updated: TargetDetailResponse) => void | Promise<void>;
 }) {
+  const viewerTitle = isViewer ? 'Viewer accounts cannot make changes' : undefined;
   const metadata = detail.target.metadata as Record<string, any>;
   const audit = (metadata.audit || {}) as any;
   const [artifactPath, setArtifactPath] = useState(audit.artifactPath || detail.target.modelName || '');
@@ -2431,6 +2451,7 @@ function ModelAuditWorkspace({
   const latestRun = runs[0];
 
   async function saveConfig() {
+    if (isViewer) return false;
     setError('');
     setMessage('');
     const payload: ModelAuditStageConfigPayload = {
@@ -2469,7 +2490,7 @@ function ModelAuditWorkspace({
   }
 
   async function cancelStage() {
-    if (!activeRunId) return;
+    if (isViewer || !activeRunId) return;
     setError('');
     setMessage('');
     try {
@@ -2578,14 +2599,14 @@ function ModelAuditWorkspace({
         <section className="subpanel">
           <h3>Run controls</h3>
           <div className="stage-actions">
-            <button className="secondary-button" type="button" onClick={saveConfig}>
+            <button className="secondary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={saveConfig}>
               Save config
             </button>
-            <button className="primary-button" type="button" onClick={runStage} disabled={running || !scanners.length}>
+            <button className="primary-button" type="button" onClick={runStage} disabled={isViewer || running || !scanners.length} title={viewerTitle}>
               {running ? 'Running...' : 'Run audit'}
             </button>
             {activeRunId ? (
-              <button className="danger-button" type="button" onClick={cancelStage}>
+              <button className="danger-button" type="button" disabled={isViewer} title={viewerTitle} onClick={cancelStage}>
                 Cancel audit
               </button>
             ) : null}
@@ -2625,12 +2646,15 @@ function ModelAuditWorkspace({
 function EvidenceWorkspace({
   detail,
   token,
+  isViewer,
   onRefresh,
 }: {
   detail: TargetDetailResponse;
   token: string;
+  isViewer?: boolean;
   onRefresh?: (updated: TargetDetailResponse) => void | Promise<void>;
 }) {
+  const viewerTitle = isViewer ? 'Viewer accounts cannot make changes' : undefined;
   const [report, setReport] = useState<TargetReport | null>(null);
   const [runs, setRuns] = useState<StageRun[]>([]);
   const [schedules, setSchedules] = useState<TargetSchedule[]>([]);
@@ -2678,6 +2702,7 @@ function EvidenceWorkspace({
   }
 
   async function handleCreateSchedule() {
+    if (isViewer) return;
     setError('');
     setScheduleBusy('create');
     try {
@@ -2700,6 +2725,7 @@ function EvidenceWorkspace({
   }
 
   async function handleToggleSchedule(schedule: TargetSchedule) {
+    if (isViewer) return;
     setError('');
     setScheduleBusy(schedule.id);
     try {
@@ -2713,6 +2739,7 @@ function EvidenceWorkspace({
   }
 
   async function handleDeleteSchedule(scheduleId: string) {
+    if (isViewer) return;
     if (!window.confirm('Delete this schedule? It will stop running automatically.')) {
       return;
     }
@@ -2729,6 +2756,7 @@ function EvidenceWorkspace({
   }
 
   async function handleRunSchedule(scheduleId: string) {
+    if (isViewer) return;
     setError('');
     setScheduleBusy(scheduleId);
     try {
@@ -2770,6 +2798,7 @@ function EvidenceWorkspace({
   }
 
   async function handleRerun(runId: string) {
+    if (isViewer) return;
     setError('');
     setRunBusy(runId);
     try {
@@ -2787,6 +2816,7 @@ function EvidenceWorkspace({
   }
 
   async function handleDeleteRun(runId: string) {
+    if (isViewer) return;
     if (!window.confirm('Delete this run? Its results and evidence trail will be permanently removed.')) {
       return;
     }
@@ -2807,6 +2837,7 @@ function EvidenceWorkspace({
   }
 
   async function handleCancelRun(runId: string) {
+    if (isViewer) return;
     setError('');
     setRunBusy(runId);
     try {
@@ -2968,7 +2999,8 @@ function EvidenceWorkspace({
           <button
             className="primary-button"
             type="button"
-            disabled={!scheduleName.trim() || !scheduleStages.length || Boolean(scheduleBusy)}
+            disabled={isViewer || !scheduleName.trim() || !scheduleStages.length || Boolean(scheduleBusy)}
+            title={viewerTitle}
             onClick={handleCreateSchedule}
           >
             {scheduleBusy === 'create' ? 'Saving...' : 'Create schedule'}
@@ -2991,13 +3023,13 @@ function EvidenceWorkspace({
                   ) : null}
                 </div>
                 <span className="badge">{schedule.enabled ? 'enabled' : 'paused'}</span>
-                <button className="secondary-button" type="button" disabled={scheduleBusy === schedule.id} onClick={() => handleRunSchedule(schedule.id)}>
+                <button className="secondary-button" type="button" disabled={isViewer || scheduleBusy === schedule.id} title={viewerTitle} onClick={() => handleRunSchedule(schedule.id)}>
                   Run now
                 </button>
-                <button className="secondary-button" type="button" disabled={scheduleBusy === schedule.id} onClick={() => handleToggleSchedule(schedule)}>
+                <button className="secondary-button" type="button" disabled={isViewer || scheduleBusy === schedule.id} title={viewerTitle} onClick={() => handleToggleSchedule(schedule)}>
                   {schedule.enabled ? 'Pause' : 'Enable'}
                 </button>
-                <button className="ghost-button" type="button" disabled={scheduleBusy === schedule.id} onClick={() => handleDeleteSchedule(schedule.id)}>
+                <button className="ghost-button" type="button" disabled={isViewer || scheduleBusy === schedule.id} title={viewerTitle} onClick={() => handleDeleteSchedule(schedule.id)}>
                   Delete
                 </button>
               </div>
@@ -3074,15 +3106,15 @@ function EvidenceWorkspace({
                 <button className="secondary-button" type="button" onClick={() => inspectRun(run.id)}>
                   Trace
                 </button>
-                <button className="secondary-button" type="button" disabled={runBusy === run.id} onClick={() => handleRerun(run.id)}>
+                <button className="secondary-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleRerun(run.id)}>
                   Rerun
                 </button>
                 {['running', 'queued', 'cancelling'].includes(run.status) ? (
-                  <button className="danger-button" type="button" disabled={runBusy === run.id} onClick={() => handleCancelRun(run.id)}>
+                  <button className="danger-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleCancelRun(run.id)}>
                     Cancel
                   </button>
                 ) : null}
-                <button className="ghost-button" type="button" disabled={runBusy === run.id} onClick={() => handleDeleteRun(run.id)}>
+                <button className="ghost-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleDeleteRun(run.id)}>
                   Delete
                 </button>
               </div>
@@ -3176,6 +3208,7 @@ function TargetDetailPage({
   providerGroups,
   workflowCatalog,
   initialStage,
+  isViewer,
   onBack,
   onRefresh,
   onDeleted,
@@ -3186,11 +3219,13 @@ function TargetDetailPage({
   providerGroups: ProviderCatalogGroup[];
   workflowCatalog: WorkflowCatalogResponse;
   initialStage?: StageKey;
+  isViewer?: boolean;
   onBack: () => void;
   onRefresh: (updated: TargetDetailResponse) => void;
   onDeleted: () => Promise<void>;
   onDuplicated: (id: string) => Promise<void>;
 }) {
+  const viewerTitle = isViewer ? 'Viewer accounts cannot make changes' : undefined;
   const [error, setError] = useState('');
   const [duplicating, setDuplicating] = useState(false);
   const [activeStage, setActiveStage] = useState<StageKey>(initialStage || 'eval');
@@ -3304,6 +3339,7 @@ function TargetDetailPage({
   }
 
   async function handlePrepare(stageKey: 'eval' | 'red_team' | 'model_audit') {
+    if (isViewer) return;
     setError('');
     try {
       onRefresh(await prepareStage(token, detail.target.id, stageKey));
@@ -3325,6 +3361,7 @@ function TargetDetailPage({
   }
 
   async function handleDuplicate() {
+    if (isViewer) return;
     setError('');
     setExportMessage('');
     setDuplicating(true);
@@ -3367,6 +3404,7 @@ function TargetDetailPage({
 
   async function handleSettingsSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isViewer) return;
     setError('');
     setSettingsMessage('');
     setSettingsSaving(true);
@@ -3418,6 +3456,7 @@ function TargetDetailPage({
   }
 
   async function handleTargetDelete() {
+    if (isViewer) return;
     if (
       !window.confirm(
         `Delete "${detail.target.displayName}"? This permanently removes all its runs, datasets, schedules, and stored provider keys. This cannot be undone.`,
@@ -3457,7 +3496,7 @@ function TargetDetailPage({
           <button className="secondary-button" type="button" onClick={handleExport}>
             Copy JSON
           </button>
-          <button className="secondary-button" type="button" disabled={duplicating} onClick={handleDuplicate}>
+          <button className="secondary-button" type="button" disabled={isViewer || duplicating} title={viewerTitle} onClick={handleDuplicate}>
             {duplicating ? 'Duplicating...' : 'Duplicate'}
           </button>
           <button className="secondary-button" type="button" onClick={() => handleArtifactDownload('yaml')}>
@@ -3786,13 +3825,13 @@ function TargetDetailPage({
               </div>
             </div>
             <div className="stage-actions">
-              <button className="primary-button" type="submit" disabled={settingsSaving}>
+              <button className="primary-button" type="submit" disabled={isViewer || settingsSaving} title={viewerTitle}>
                 {settingsSaving ? 'Saving...' : 'Save settings'}
               </button>
               <button className="ghost-button" type="button" onClick={() => setSettingsOpen(false)}>
                 Close
               </button>
-              <button className="danger-button" type="button" disabled={settingsSaving} onClick={handleTargetDelete}>
+              <button className="danger-button" type="button" disabled={isViewer || settingsSaving} title={viewerTitle} onClick={handleTargetDelete}>
                 Delete target
               </button>
             </div>
@@ -3821,7 +3860,8 @@ function TargetDetailPage({
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={!readiness.ready}
+                  disabled={!readiness.ready || isViewer}
+                  title={isViewer ? viewerTitle : undefined}
                   onClick={() => handlePrepare(key)}
                 >
                   Prepare {label}
@@ -3866,6 +3906,7 @@ function TargetDetailPage({
           activeStage={activeStage}
           providerGroups={providerGroups}
           workflowCatalog={workflowCatalog}
+          isViewer={isViewer}
           runs={activeStage === 'evidence' ? [] : stageRuns[activeStage]}
           onRefresh={async (updated) => {
             onRefresh(updated);
@@ -3886,6 +3927,7 @@ function StageWorkspace({
   providerGroups,
   workflowCatalog,
   runs,
+  isViewer,
   onRefresh,
 }: {
   detail: TargetDetailResponse;
@@ -3894,10 +3936,11 @@ function StageWorkspace({
   providerGroups: ProviderCatalogGroup[];
   workflowCatalog: WorkflowCatalogResponse;
   runs: StageRun[];
+  isViewer?: boolean;
   onRefresh: (updated: TargetDetailResponse) => void | Promise<void>;
 }) {
   if (activeStage === 'evidence') {
-    return <EvidenceWorkspace detail={detail} token={token} onRefresh={onRefresh} />;
+    return <EvidenceWorkspace detail={detail} token={token} isViewer={isViewer} onRefresh={onRefresh} />;
   }
 
   if (activeStage === 'eval') {
@@ -3908,6 +3951,7 @@ function StageWorkspace({
         providerGroups={providerGroups}
         workflowCatalog={workflowCatalog}
         evalRuns={runs}
+        isViewer={isViewer}
         onRefresh={onRefresh}
       />
     );
@@ -3920,6 +3964,7 @@ function StageWorkspace({
         token={token}
         workflowCatalog={workflowCatalog}
         runs={runs}
+        isViewer={isViewer}
         onRefresh={onRefresh}
       />
     );
@@ -3931,6 +3976,7 @@ function StageWorkspace({
       token={token}
       workflowCatalog={workflowCatalog}
       runs={runs}
+      isViewer={isViewer}
       onRefresh={onRefresh}
     />
   );
@@ -4361,7 +4407,10 @@ function App() {
     if (!catalog || routedRef.current) return;
     routedRef.current = true;
     const route = parseRoute(window.location.hash);
-    if (route.view === 'detail' && route.targetId) {
+    const isAdminRoute = ['users', 'tokens'].includes(route.view);
+    if (isAdminRoute && user?.role !== 'admin') {
+      setView('registry');
+    } else if (route.view === 'detail' && route.targetId) {
       openDetail(route.targetId, route.stage);
     } else if (route.view === 'onboard') {
       setView('onboard');
@@ -4379,7 +4428,11 @@ function App() {
   useEffect(() => {
     function handleHashChange() {
       const route = parseRoute(window.location.hash);
-      if (route.view === 'detail' && route.targetId) {
+      const isAdminRoute = ['users', 'tokens'].includes(route.view);
+      if (isAdminRoute && user?.role !== 'admin') {
+        setDetail(null);
+        setView('registry');
+      } else if (route.view === 'detail' && route.targetId) {
         if (detail && detail.target.id === route.targetId) {
           // Same target, only the stage tab changed (e.g. via goToStage or back/forward
           // between stages) — avoid an unnecessary refetch.
@@ -4469,6 +4522,7 @@ function App() {
           targets={targets}
           message={message}
           token={token}
+          isViewer={user.role !== 'admin'}
           onSelect={(id) => openDetail(id)}
           onImported={handleCreated}
           onOnboard={goOnboard}
@@ -4486,6 +4540,7 @@ function App() {
           providerGroups={providerGroups}
           workflowCatalog={workflowCatalog}
           initialStage={initialStage}
+          isViewer={user.role !== 'admin'}
           onBack={goRegistry}
           onRefresh={(updated) => setDetail(updated)}
           onDeleted={async () => {

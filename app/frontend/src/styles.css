@@ -585,6 +585,12 @@ h3 {
   text-decoration: none;
 }
 
+.secondary-link.disabled-link {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .config-preview {
   max-height: 440px;
   overflow: auto;

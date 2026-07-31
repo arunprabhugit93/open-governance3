@@ -1456,3 +1456,66 @@ this loop, not an unlimited test double.
       default. Finally reran the target's original baseline eval config
       unchanged to confirm no regression (still 1/1 pass). Cleaned up all
       test runs and fully restored both configs afterward.
+
+## Change log — iteration 29 (viewer role: hide/disable write actions in the UI)
+
+46. Closed a long-standing item from the original task #8 list: viewer
+    accounts were fully blocked server-side (403 on every mutating route)
+    but the frontend never hid or disabled the write-action buttons that
+    trigger those routes — a viewer could click "Run eval", "Save
+    config", "Delete target", etc. and just get an unexplained error.
+    The user explicitly confirmed this was in scope ("password reset
+    flow not required complete others") when asked to prioritize the
+    remaining known-gaps list.
+    - Threaded a new `isViewer` prop from the `App` component (computed
+      once as `user.role !== 'admin'`) down through `RegistryPage`,
+      `TargetDetailPage` -> `StageWorkspace` -> `EvalWorkspace` /
+      `RedTeamWorkspace` / `ModelAuditWorkspace` / `EvidenceWorkspace`.
+    - Scoped the change to buttons that actually trigger an API call
+      (POST/PATCH/DELETE) — not every button that mutates local React
+      state. Local-only actions like "Add provider", "Remove", "Add
+      prompt", "Add case" still work freely for a viewer (they're just
+      editing in-memory form state, nothing to block), matching the
+      existing viewer badge's own promise ("can browse everything"). The
+      buttons gated are the ones that would otherwise 403: Onboard a
+      model, Import config/Load file, Duplicate, Target settings
+      save/delete, Prepare stage, Test provider, Save config/version/use,
+      activate/delete dataset, Run/Cancel eval-redteam-audit, Create/
+      run-now/pause/delete schedule, Rerun/Cancel/Delete run.
+    - Defense in depth: every gated button also got `disabled={isViewer}`
+      **and** the underlying handler function got an `if (isViewer)
+      return` guard at the top — disabling the button alone doesn't stop
+      a form's Enter-key submit path, so the handler-level guard is the
+      real backstop; the disabled attribute is just the discoverability
+      layer (plus a `title="Viewer accounts cannot make changes"` tooltip
+      on every one, so it's not just a silently unclickable button).
+    - Also found and fixed a related, smaller gap while doing this: a
+      viewer typing `#/users` or `#/tokens` directly into the URL bar
+      could still reach `UsersPage`/`TokensPage` (the nav buttons to
+      those pages were already admin-only, but there was no guard on the
+      hash-routing resolution itself). Added an `isAdminRoute` check in
+      both the initial-load and hashchange routing effects that redirects
+      to the registry if a non-admin's URL points at an admin-only view.
+    - Updated the "Default test variables" label copy while in the area
+      (see iteration 28, item 45) — unrelated content fix bundled in
+      since it was a one-line change already staged.
+    - Verified live end-to-end with a real second account, not just code
+      review: created a disposable viewer user via the API, logged into
+      the actual UI as that user, and confirmed via the accessibility
+      tree (`title` attributes, not just visual color) that every gated
+      button reports "Viewer accounts cannot make changes" — Onboard a
+      model, Import config, Prepare Eval/Red team/Model audit, Test
+      provider, Save version/Save and use, Save config, Run eval — while
+      "Add provider"/"Remove"/"Add prompt" remained genuinely clickable.
+      Confirmed the "Users"/"API tokens" nav buttons are absent for a
+      viewer, and that manually setting `location.hash = '#/users'`
+      correctly redirects back to the registry instead of rendering the
+      admin page. Logged back in as the real admin account afterward and
+      confirmed every one of those same buttons is fully enabled with no
+      `title` tooltip — the change is additive for viewers only, zero
+      behavior change for admins. Deleted the disposable viewer account
+      afterward. (One unrelated hiccup during this pass: the browser
+      automation tool's own click events intermittently failed to
+      register on the login button — confirmed it was a tool-side issue,
+      not a regression, by dispatching a real `form.requestSubmit()` via
+      JS, which worked immediately and logged in correctly.)
