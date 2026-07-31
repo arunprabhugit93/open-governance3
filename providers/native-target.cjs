@@ -13,6 +13,47 @@ function parseBody(text) {
   }
 }
 
+function getByPath(obj, dotPath) {
+  if (!dotPath) return undefined;
+  return String(dotPath)
+    .split('.')
+    .reduce((acc, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), obj);
+}
+
+function deepTemplateSubstitute(value, context) {
+  if (typeof value === 'string') {
+    let text = value;
+    for (const [key, val] of Object.entries(context)) {
+      text = text.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), String(val ?? ''));
+    }
+    return text;
+  }
+  if (Array.isArray(value)) return value.map((item) => deepTemplateSubstitute(item, context));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, deepTemplateSubstitute(val, context)]));
+  }
+  return value;
+}
+
+function parseLibraryConfig(libraryConfig, hint) {
+  if (!libraryConfig) return {};
+  if (typeof libraryConfig === 'object') return libraryConfig;
+  try {
+    return JSON.parse(libraryConfig);
+  } catch {
+    throw new Error(`Provider config must be valid JSON${hint ? ` (${hint})` : ''}`);
+  }
+}
+
+let playwrightChromium = null;
+function loadPlaywrightChromium() {
+  if (!playwrightChromium) {
+    // eslint-disable-next-line global-require
+    playwrightChromium = require('playwright').chromium;
+  }
+  return playwrightChromium;
+}
+
 function textFromContent(content) {
   if (Array.isArray(content)) {
     return content.map((item) => item.text || '').join('');
@@ -75,6 +116,12 @@ module.exports = class NativeTargetProvider {
           return await this.callCliProvider(prompt);
         case 'custom-script':
           return await this.callCustomScriptProvider(prompt);
+        case 'graphql':
+          return await this.callGraphQL(prompt);
+        case 'websocket-chat':
+          return await this.callWebSocketChat(prompt);
+        case 'browser-chatbot':
+          return await this.callBrowserChatbot(prompt);
         default:
           return { error: `Native provider adapter "${adapter}" is not implemented` };
       }
@@ -402,5 +449,116 @@ module.exports = class NativeTargetProvider {
       output: typeof output === 'string' ? output : JSON.stringify(output),
       tokenUsage: body.usage,
     };
+  }
+
+  async callGraphQL(prompt) {
+    const baseUrl = this.baseUrl();
+    if (!baseUrl) return { error: 'GraphQL endpoint URL is required' };
+    const config = parseLibraryConfig(this.config.libraryConfig, 'query/variables/responsePath');
+    const context = { prompt, input: prompt, systemPrompt: this.systemPrompt(), model: this.model() };
+    const query = config.query || 'query Chat($prompt: String!) {\n  chat(prompt: $prompt) {\n    text\n  }\n}';
+    const variables = config.variables ? deepTemplateSubstitute(config.variables, context) : { prompt };
+    const response = await fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.apiKey() ? { Authorization: `Bearer ${this.apiKey()}` } : {}),
+        ...(config.headers || {}),
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    const bodyText = await response.text();
+    const body = parseBody(bodyText);
+    if (!response.ok) return { error: body.errors?.[0]?.message || body.raw || `HTTP ${response.status}` };
+    if (Array.isArray(body.errors) && body.errors.length) {
+      return { error: body.errors.map((err) => err.message).join('; ') };
+    }
+    const extracted = config.responsePath ? getByPath(body, config.responsePath) : Object.values(body.data || {})[0];
+    return {
+      output: typeof extracted === 'string' ? extracted : JSON.stringify(extracted ?? body.data ?? body),
+    };
+  }
+
+  async callWebSocketChat(prompt) {
+    const baseUrl = this.baseUrl();
+    if (!baseUrl) return { error: 'WebSocket endpoint URL is required' };
+    // eslint-disable-next-line global-require
+    const WebSocket = require('ws');
+    const config = parseLibraryConfig(this.config.libraryConfig, 'messageTemplate/responsePath/timeoutMs');
+    const context = { prompt, input: prompt, systemPrompt: this.systemPrompt(), model: this.model() };
+    const outgoing = config.messageTemplate !== undefined ? deepTemplateSubstitute(config.messageTemplate, context) : prompt;
+    const payload = typeof outgoing === 'string' ? outgoing : JSON.stringify(outgoing);
+    const timeoutMs = Number(config.timeoutMs || 15000);
+    const headers = {
+      ...(this.apiKey() ? { Authorization: `Bearer ${this.apiKey()}` } : {}),
+      ...(config.headers || {}),
+    };
+    return new Promise((resolve) => {
+      let settled = false;
+      const socket = new WebSocket(baseUrl, { headers });
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        socket.terminate();
+        resolve({ error: 'WebSocket provider timed out waiting for a response' });
+      }, timeoutMs);
+      socket.on('open', () => {
+        socket.send(payload);
+      });
+      socket.on('message', (data) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const text = data.toString();
+        let output = text;
+        try {
+          const parsed = JSON.parse(text);
+          const extracted = config.responsePath
+            ? getByPath(parsed, config.responsePath)
+            : parsed.output ?? parsed.response ?? parsed.text ?? parsed.message ?? text;
+          output = typeof extracted === 'string' ? extracted : JSON.stringify(extracted);
+        } catch {
+          // Not JSON — treat the raw frame text as the output.
+        }
+        socket.close();
+        resolve({ output });
+      });
+      socket.on('error', (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ error: error.message });
+      });
+    });
+  }
+
+  async callBrowserChatbot(prompt) {
+    const baseUrl = this.baseUrl();
+    if (!baseUrl) return { error: 'Browser chatbot URL is required' };
+    const config = parseLibraryConfig(this.config.libraryConfig, 'inputSelector/submitSelector/responseSelector');
+    if (!config.inputSelector) return { error: 'Browser chatbot config requires "inputSelector"' };
+    if (!config.responseSelector) return { error: 'Browser chatbot config requires "responseSelector"' };
+    const chromium = loadPlaywrightChromium();
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(baseUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: Number(config.navigationTimeoutMs || 30000),
+      });
+      await page.waitForSelector(config.inputSelector, { timeout: Number(config.waitMs || 15000) });
+      await page.fill(config.inputSelector, prompt);
+      if (config.submitSelector) {
+        await page.click(config.submitSelector);
+      } else {
+        await page.press(config.inputSelector, 'Enter');
+      }
+      await page.waitForSelector(config.responseSelector, { timeout: Number(config.waitMs || 15000) });
+      await page.waitForTimeout(Number(config.settleMs || 1500));
+      const output = (await page.locator(config.responseSelector).last().innerText()).trim();
+      return { output };
+    } finally {
+      await browser.close();
+    }
   }
 };

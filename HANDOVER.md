@@ -1652,3 +1652,54 @@ this loop, not an unlimited test double.
       (`display: grid`, 4 sensible column widths, not stacked/broken).
       Reran the target's original baseline config afterward to confirm
       no regression. Cleaned up the test run and restored the config.
+
+## Change log — iteration 32 (native-engine-mode parity for graphql/websocket-chat/browser-chatbot)
+
+50. Closed the last documented "honest limitation" from iteration 14:
+    the three hand-built application-target adapters (`graphql`,
+    `websocket-chat`, `browser-chatbot` — real promptfoo has no
+    equivalents for these, so they were always hand-implemented) worked
+    fine in this product's own "Direct product runner" mode but threw
+    `"Native engine mode does not yet support the X adapter"` if a user
+    switched to "Installed engine runner" (the real, installed promptfoo
+    CLI, invoked via `providers/native-target.cjs` as a custom JS
+    provider in a spawned process). That bridge script only had 8 of the
+    11 direct-mode adapters ported over.
+    - Ported all three call implementations from `server.cjs`
+      (`callGraphQL`/`callWebSocketChat`/`callBrowserChatbot`) into
+      `providers/native-target.cjs` as class methods, along with the
+      three small helpers they depend on (`getByPath`,
+      `deepTemplateSubstitute`, `parseLibraryConfig`) and a lazy
+      Playwright Chromium loader — faithful ports, not
+      reimplementations, so behavior matches direct mode exactly
+      (same `libraryConfig` shape: `query`/`variables`/`responsePath`
+      for GraphQL, `messageTemplate`/`responsePath`/`timeoutMs` for
+      WebSocket, `inputSelector`/`submitSelector`/`responseSelector` for
+      browser). `ws` and `playwright` were already project dependencies
+      (added in iteration 14) and this script runs in the same
+      node_modules tree, so no new dependencies were needed.
+    - Added the three adapter ids to the `nativeAdapters` allowlist in
+      `buildNativePromptfooConfig` (`server.cjs`), and — the actual root
+      cause of why this was silently impossible before, not just
+      unlisted — added the missing `libraryConfig: providerConfig.
+      libraryConfig` line to the provider config object that function
+      assembles; without it, even a correctly-ported native adapter
+      would have received an empty config and failed on every call.
+    - Verified live against real local test servers (a GraphQL-shaped
+      JSON endpoint, a `ws` echo server, and a static HTML page with a
+      real input/button/response DOM — the same fixtures used for the
+      original direct-mode verification in iteration 14), each run
+      through the real installed-promptfoo-CLI path
+      (`runOptions.engineMode: 'native'`), not direct mode: GraphQL
+      returned `{"text":"graphql-echo: ..."}` and passed its assertion;
+      WebSocket returned `"ws-echo: ..."` and passed; browser-chatbot
+      launched a real headless Chromium, filled the input, clicked
+      submit, read the response DOM, returned `"browser-echo: ..."` and
+      passed. All three were genuine round trips through the real
+      installed promptfoo engine, not the product's own direct runner.
+      Also reran the E2E reference target's baseline eval unchanged
+      (still 1/1 pass, direct mode) to confirm no regression. Deleted
+      the disposable target and stopped the test-fixture servers
+      afterward. No more adapters have an "honest limitation" placeholder
+      in native mode — all 11 direct-mode adapters now also work in
+      native mode.

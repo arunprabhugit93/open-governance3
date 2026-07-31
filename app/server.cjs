@@ -2970,7 +2970,19 @@ async function buildNativePromptfooConfig(target) {
   const config = buildPromptfooConfig(target);
   const env = {};
   const providers = [];
-  const nativeAdapters = new Set(['openai-compatible', 'azure-openai', 'anthropic', 'cohere', 'gemini', 'http-json', 'cli-provider', 'custom-script']);
+  const nativeAdapters = new Set([
+    'openai-compatible',
+    'azure-openai',
+    'anthropic',
+    'cohere',
+    'gemini',
+    'http-json',
+    'cli-provider',
+    'custom-script',
+    'graphql',
+    'websocket-chat',
+    'browser-chatbot',
+  ]);
   for (const [index, provider] of (config.providers || []).entries()) {
     if (!nativeAdapters.has(provider.id)) {
       throw new Error(`Native engine mode does not yet support the ${provider.id} adapter`);
@@ -2991,6 +3003,7 @@ async function buildNativePromptfooConfig(target) {
         maxTokens: providerConfig.maxTokens,
         systemPrompt: providerConfig.systemPrompt,
         apiVersion: providerConfig.apiVersion,
+        libraryConfig: providerConfig.libraryConfig,
       },
     });
   }
