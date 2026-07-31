@@ -1315,3 +1315,44 @@ this loop, not an unlimited test double.
       confirmed the datasets list correctly went back to empty. No
       regression to the live Groq target's own provider check
       afterward.
+
+## Change log — iteration 27 (found + fixed during a user-requested comprehensive evidence pass)
+
+43. The user asked for a fresh, comprehensive functional test of
+    everything built this session with real evidence (not screenshots)
+    compiled into a structured report. Found a genuine, previously
+    undiscovered bug while generating that evidence for the
+    model-audit workspace: `PATCH /api/targets/:id/stages/:stageKey/config`
+    (the shared route for both `red_team` and `model_audit` configs)
+    used `body.field || default` for nearly every field — meaning a
+    caller who sent a *partial* update (e.g. `{"scanners": [...]}`
+    alone) silently reset every field it didn't mention back to empty:
+    `source`, `licensePolicy`, `artifactPath`, `notes` for model audit;
+    `purpose`, `plugins`, `strategies`, `language`, `entities`,
+    `customProbes`, `runOptions.*`, `defaultTest.vars`,
+    `runtime.allowedTools`, `runtime.retrievalSources` for red team.
+    This is the exact same class of bug already found and fixed for
+    `evalBody.testCases` earlier this session — but that fix only
+    touched the eval config route, and this sibling route (added
+    separately) had the identical defect. It never showed up through
+    the actual UI because the frontend always round-trips full
+    component state on every save (never sends a partial payload) —
+    but this product now ships API tokens specifically so CI/CD
+    scripts can call these endpoints directly, and a script doing
+    exactly the kind of small, targeted update that's the whole point
+    of programmatic access (e.g. "just bump `artifactPath` after a
+    redeploy") would have silently corrupted every other field.
+    - Fixed every field in both branches to fall back to the existing
+      stored value (`body.x !== undefined ? body.x : existing.x`)
+      instead of a hardcoded default, matching the pattern already
+      used for `testCases`.
+    - Verified live, carefully, since this touched the E2E reference
+      target's real config: captured the config before testing,
+      confirmed the bug live (`PATCH {"scanners":["malware"]}` wiped
+      `source`/`licensePolicy` to `""`, breaking readiness), applied
+      the fix, restarted, confirmed the identical partial PATCH now
+      correctly preserves `source`/`licensePolicy`/`artifactPath`
+      while updating only `scanners`, repeated the check for
+      `red_team` (`{"numTests":7}` alone no longer wipes `purpose`/
+      `plugins`/`strategies`), then fully restored the E2E target's
+      original audit and red-team config afterward.

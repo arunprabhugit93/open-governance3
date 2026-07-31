@@ -4853,20 +4853,43 @@ app.patch('/api/targets/:id/stages/:stageKey/config', requireAuth, requireAdmin,
   const target = payload.target;
   const body = req.body || {};
   const metadata = { ...(target.metadata || {}) };
+  // Every field below falls back to the existing stored value when the caller's PATCH body
+  // omits that field, instead of resetting it to an empty/default value. The frontend always
+  // sends every field (it round-trips full component state on every save), so this was
+  // invisible through the normal UI — but API-token callers (the CI/CD integration this
+  // product ships) have every reason to send a genuinely partial update, e.g. "just bump
+  // artifactPath after a redeploy" — and a naive `body.x || default` here would have silently
+  // wiped purpose/plugins/scanners/customProbes/etc. on exactly that kind of call. Same bug,
+  // same fix already applied to `evalBody.testCases` in the eval config route earlier.
+  const existingRedteam = metadata.redteam || {};
+  const existingAudit = metadata.audit || {};
+  const existingRuntime = metadata.runtime || {};
   if (stageKey === 'red_team') {
     metadata.redteam = {
-      ...(metadata.redteam || {}),
-      purpose: body.purpose || '',
-      plugins: asArray(body.plugins),
-      strategies: asArray(body.strategies),
-      numTests: Number(body.numTests || 5),
-      maxCharsPerMessage: body.maxCharsPerMessage ? Number(body.maxCharsPerMessage) : undefined,
-      language: asArray(body.language),
+      ...existingRedteam,
+      purpose: body.purpose !== undefined ? body.purpose : existingRedteam.purpose || '',
+      plugins: body.plugins !== undefined ? asArray(body.plugins) : asArray(existingRedteam.plugins),
+      strategies: body.strategies !== undefined ? asArray(body.strategies) : asArray(existingRedteam.strategies),
+      numTests: body.numTests !== undefined ? Number(body.numTests) : Number(existingRedteam.numTests || 5),
+      maxCharsPerMessage:
+        body.maxCharsPerMessage !== undefined ? Number(body.maxCharsPerMessage) : existingRedteam.maxCharsPerMessage,
+      language: body.language !== undefined ? asArray(body.language) : asArray(existingRedteam.language),
       runOptions: {
-        maxConcurrency: Math.max(1, Number(body.runOptions?.maxConcurrency || 1)),
-        delayMs: Math.max(0, Number((body.runOptions?.delayMs ?? body.runOptions?.delay) || 0)),
-        timeoutMs: Math.max(1000, Number(body.runOptions?.timeoutMs || 30000)),
-        verbose: Boolean(body.runOptions?.verbose),
+        maxConcurrency: Math.max(
+          1,
+          Number(body.runOptions?.maxConcurrency ?? existingRedteam.runOptions?.maxConcurrency ?? 1),
+        ),
+        delayMs: Math.max(
+          0,
+          Number((body.runOptions?.delayMs ?? body.runOptions?.delay ?? existingRedteam.runOptions?.delayMs) || 0),
+        ),
+        timeoutMs: Math.max(
+          1000,
+          Number(body.runOptions?.timeoutMs ?? existingRedteam.runOptions?.timeoutMs ?? 30000),
+        ),
+        verbose: body.runOptions?.verbose !== undefined
+          ? Boolean(body.runOptions.verbose)
+          : Boolean(existingRedteam.runOptions?.verbose),
       },
       defaultTest: {
         vars:
@@ -4876,9 +4899,9 @@ app.patch('/api/targets/:id/stages/:stageKey/config', requireAuth, requireAdmin,
                   .map(([key, value]) => [String(key).trim(), String(value)])
                   .filter(([key]) => key),
               )
-            : {},
+            : existingRedteam.defaultTest?.vars || {},
       },
-      entities: asArray(body.entities),
+      entities: body.entities !== undefined ? asArray(body.entities) : asArray(existingRedteam.entities),
       customProbes: Array.isArray(body.customProbes)
         ? body.customProbes
             .map((probe, index) => ({
@@ -4890,23 +4913,24 @@ app.patch('/api/targets/:id/stages/:stageKey/config', requireAuth, requireAdmin,
               expectedRefusalMarkers: asArray(probe.expectedRefusalMarkers),
             }))
             .filter((probe) => probe.prompt)
-        : [],
+        : existingRedteam.customProbes || [],
     };
     metadata.runtime = {
-      ...(metadata.runtime || {}),
-      dataClassification: body.dataClassification || metadata.runtime?.dataClassification || '',
-      allowedTools: asArray(body.allowedTools),
-      retrievalSources: asArray(body.retrievalSources),
+      ...existingRuntime,
+      dataClassification: body.dataClassification || existingRuntime.dataClassification || '',
+      allowedTools: body.allowedTools !== undefined ? asArray(body.allowedTools) : asArray(existingRuntime.allowedTools),
+      retrievalSources:
+        body.retrievalSources !== undefined ? asArray(body.retrievalSources) : asArray(existingRuntime.retrievalSources),
     };
   } else {
     metadata.audit = {
-      ...(metadata.audit || {}),
-      artifactPath: body.artifactPath || '',
-      source: body.source || '',
-      licensePolicy: body.licensePolicy || '',
-      sbomRequired: Boolean(body.sbomRequired),
-      scanners: asArray(body.scanners),
-      notes: body.notes || '',
+      ...existingAudit,
+      artifactPath: body.artifactPath !== undefined ? body.artifactPath : existingAudit.artifactPath || '',
+      source: body.source !== undefined ? body.source : existingAudit.source || '',
+      licensePolicy: body.licensePolicy !== undefined ? body.licensePolicy : existingAudit.licensePolicy || '',
+      sbomRequired: body.sbomRequired !== undefined ? Boolean(body.sbomRequired) : Boolean(existingAudit.sbomRequired),
+      scanners: body.scanners !== undefined ? asArray(body.scanners) : asArray(existingAudit.scanners),
+      notes: body.notes !== undefined ? body.notes : existingAudit.notes || '',
     };
   }
 
