@@ -1412,3 +1412,47 @@ this loop, not an unlimited test double.
       confirmed `/api/workflow-catalog` now reports 61 assertion types
       including `guardrails`. Cleaned up the test run and restored the
       target's original eval config afterward.
+
+45. Same `/loop` continuation, second fix: found that `defaultTest.vars`
+    — real promptfoo's top-level config field that applies default
+    variables to *every* test in a config — was captured (this product
+    stores it under `redteam.defaultTest.vars`, the only place the UI
+    exposes it) but only ever read during red-team case generation,
+    never merged into actual eval test execution. Same "plumbing exists
+    but isn't wired to what it claims" pattern as iteration 19 (model-audit
+    findings) and iteration 23 (rerun scoping): `normalizeImportedPromptfooConfig`
+    already captures a top-level `defaultTest` from an imported promptfoo
+    YAML, but `buildEvalTests`/`executeEvalRun` never read it, so an
+    imported config's `defaultTest.vars` would silently have zero effect
+    on eval runs — only on red-team generation.
+    - Fixed `buildEvalTests` in `server.cjs` to merge
+      `target.metadata.redteam.defaultTest.vars` as the base for every
+      eval test case's vars, with test-specific `vars` still overriding
+      on key conflicts (matches promptfoo's own precedence) — a 5-line,
+      single-choke-point fix since every eval test case already flows
+      through this one function regardless of whether it came from a
+      manually-added test case or an imported/scenario-expanded one.
+    - Updated the "Default test variables" label copy in the Red team
+      workspace (`main.tsx`) from "reused across generated and custom
+      probes" (implied redteam-only) to state it applies as a base to
+      every test case in both Eval and Red team runs — the UI didn't
+      move (still the one place `defaultTest.vars` is edited), only the
+      copy, so it stops under-promising what the field actually now
+      does.
+    - Deliberately scoped this to `.vars` only, not `.assert` (promptfoo's
+      `defaultTest` also supports default assertions applied to every
+      test): the stored schema and PATCH route for `redteam.defaultTest`
+      only ever had a `.vars` shape, and building a real assertion-list
+      editor UI for it is a larger, separate lift — left as explicit
+      follow-up rather than half-implementing it.
+    - Verified live against the real E2E reference target (both eval and
+      red-team config captured before, restored after): set
+      `defaultTest.vars = {tone: "formal"}` via the existing red-team
+      config route, then ran a real eval test case with a `javascript`
+      assertion (`vars.tone === "formal"`) that never set `tone` itself —
+      passed, confirming the merge. Then ran a second case that DID set
+      `vars.tone = "casual"` with an assertion expecting `"casual"` —
+      also passed, confirming test-specific vars still win over the
+      default. Finally reran the target's original baseline eval config
+      unchanged to confirm no regression (still 1/1 pass). Cleaned up all
+      test runs and fully restored both configs afterward.

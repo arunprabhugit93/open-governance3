@@ -2069,7 +2069,7 @@ function RedTeamWorkspace({
           <div className="subpanel-head">
             <div>
               <h3>Default test variables</h3>
-              <p className="muted">Set variables reused across generated and custom probes.</p>
+              <p className="muted">Applied as a base to every test case's variables in both Eval and Red team runs (test-specific values still win on conflicts).</p>
             </div>
             <button
               className="secondary-button"

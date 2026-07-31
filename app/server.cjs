@@ -1034,11 +1034,18 @@ function buildProviderConfig(target) {
 
 function buildEvalTests(target) {
   const evalConfig = target.metadata?.eval || {};
+  // promptfoo's top-level `defaultTest.vars` applies to every test in a config, not just
+  // redteam-generated probes -- this product stores it under `redteam.defaultTest` (the only
+  // place the UI exposes it today), but it must still merge into eval test cases here, or an
+  // imported config's defaultTest vars silently never take effect for eval runs.
+  const defaultVars = target.metadata?.redteam?.defaultTest?.vars;
+  const baseVars = defaultVars && typeof defaultVars === 'object' ? defaultVars : {};
   const cases = Array.isArray(evalConfig.testCases) ? evalConfig.testCases : [];
   if (cases.length) {
     return cases.map((testCase) => ({
       description: testCase.name || 'Onboarded eval test',
       vars: {
+        ...baseVars,
         ...(testCase.vars && typeof testCase.vars === 'object' ? testCase.vars : {}),
         [evalConfig.injectVar || 'prompt']: testCase.input || '',
       },
