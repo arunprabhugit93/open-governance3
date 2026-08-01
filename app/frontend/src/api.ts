@@ -35,6 +35,9 @@ export interface EvalAssertion {
   weight?: number;
   metric?: string;
   transform?: string;
+  // Raw JSON text, parsed server-side (same pattern as provider libraryConfig) — passed to
+  // javascript/python assertions as `config`/`context.config`.
+  config?: string;
   assert?: Array<{ type: string; value: string; weight?: number; metric?: string }>;
 }
 

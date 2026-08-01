@@ -3488,3 +3488,57 @@ this loop, not an unlimited test double.
       deciding factor. Restored the target's original config
       byte-for-byte and confirmed the baseline passes as before. `tsc
       --noEmit` and the production `vite build` both passed clean.
+
+## Change log — iteration 70 (per-assertion `config` for javascript/python assertions)
+
+88. Fourth consecutive Assertion-schema field found unimplemented via
+    the same source-reading method as iterations 67-69 — this time
+    `Assertion.config` ("An external mapping of arbitrary strings to
+    values that is passed to the assertion for custom asserts").
+    Real promptfoo clones `assertion.config` onto the
+    `AssertionValueFunctionContext.config` passed into javascript and
+    python grading scripts (`assertions/index.ts`), letting one script
+    be reused across multiple assertions with different settings
+    instead of hardcoding values into the expression string itself.
+    `normalizeAssertions()` dropped `config` entirely, and
+    `evaluateJavascriptAssertion`/`evaluatePythonAssertion` never
+    exposed anything by that name to the sandboxed script even before
+    that. (The webhook assertion type already has an equivalent
+    mechanism — it forwards the *whole* assertion object as
+    `context.config` in its HTTP payload — so it was left alone,
+    scoped out as already functionally covered rather than exactly
+    matching real promptfoo's narrower shape.)
+    - Added `parseAssertionConfig()` and wired it into
+      `normalizeAssertions()` — accepts either an object or a JSON
+      string (the eval workspace UI edits it as raw JSON text, the
+      same pattern this file already uses for provider
+      `libraryConfig`), silently dropping malformed JSON rather than
+      crashing normalization.
+    - `evaluateJavascriptAssertion`: added `config` as a sandbox
+      binding, and merged it into the existing `context` binding
+      as `context.config` (both bindings, matching real promptfoo's
+      documented access pattern) — without replacing `context`
+      wholesale, so this product's own context fields
+      (`target`, `providerResponse`, ...) stay available.
+    - `evaluatePythonAssertion`: same shape — added `config` to the
+      JSON payload piped to the Python wrapper and exposed it as a
+      `config` variable, plus merged into `context["config"]`.
+    - Added a conditional "Config (JSON, optional)" input to the
+      assertion editor, shown only for `javascript`/`python`
+      assertion types (the only two this iteration wires up).
+      Extended `EvalAssertion` in `api.ts`.
+    - Verified live against the real Groq-backed E2E reference target:
+      set a javascript assertion to
+      `output.length >= config.minLength` with
+      `config: {"minLength": 3}` against the real `"READY"` response —
+      passed (5 ≥ 3), and the row's own returned assertion result
+      correctly showed `config` as a parsed object, not the raw JSON
+      string. Flipped to `minLength: 100` with the same expression and
+      confirmed it correctly FAILED (5 < 100), proving `config` was
+      genuinely driving the branch, not a false pass. Repeated the
+      equivalent check for a python assertion
+      (`len(output) >= config["minLength"]`) and confirmed it passed
+      too. Restored the target's original single-assertion config
+      byte-for-byte afterward and confirmed the baseline is unchanged.
+      `tsc --noEmit` and the production `vite build` both passed
+      clean.

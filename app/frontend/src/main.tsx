@@ -2034,6 +2034,14 @@ function EvalWorkspace({
                         Remove
                       </button>
                     </div>
+                    {assertion.type === 'javascript' || assertion.type === 'python' ? (
+                      <input
+                        value={assertion.config || ''}
+                        onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { config: event.target.value || undefined })}
+                        placeholder={'Config (JSON, optional) — e.g. {"minLength":10}'}
+                        title="Custom parameters available inside the expression as `config` (or context.config) — lets one script be reused across assertions with different settings."
+                      />
+                    ) : null}
                     {assertion.type === 'assert-set' ? (
                       <div className="assertion-subset">
                         <p className="field-help">

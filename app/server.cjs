@@ -515,6 +515,22 @@ function metricDeltas(leftMetrics, rightMetrics) {
   return deltas;
 }
 
+function parseAssertionConfig(config) {
+  if (!config) return undefined;
+  if (typeof config === 'object') return config;
+  if (typeof config === 'string') {
+    const trimmed = config.trim();
+    if (!trimmed) return undefined;
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parsed && typeof parsed === 'object' ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValue = '') {
   if (Array.isArray(assertions) && assertions.length) {
     return assertions
@@ -546,6 +562,12 @@ function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValu
         // supports (which runs once, before every assertion). Lets different assertions on the
         // same test check different transformed views of the same raw output.
         transform: assertion.transform,
+        // Real promptfoo's `config` — arbitrary custom parameters passed into javascript/python
+        // grading scripts as `context.config`/`config`, letting one script be reused across
+        // assertions with different settings instead of hardcoding values into the expression.
+        // The eval workspace UI edits this as raw JSON text (same pattern as provider
+        // libraryConfig elsewhere in this file), so accept either shape here.
+        config: parseAssertionConfig(assertion.config),
       }))
       .filter((assertion) => assertion.type);
   }
@@ -1534,12 +1556,17 @@ function applyOutputTransform(output, transformExpr, context) {
 
 function evaluateJavascriptAssertion(output, assertion, context) {
   const script = new vm.Script(`(${String(assertion.value || 'false')})`);
+  const config = assertion.config && typeof assertion.config === 'object' ? assertion.config : {};
   const sandbox = {
     output: String(output || ''),
     expected: String(assertion.expected || ''),
     prompt: String(context.prompt || ''),
     vars: context.vars || {},
-    context,
+    // Real promptfoo exposes assertion.config as context.config to javascript/python
+    // assertions — merged in here rather than replacing `context` wholesale so the rest of
+    // this product's own context fields (target, providerResponse, ...) stay available too.
+    context: { ...context, config },
+    config,
     latencyMs: context.latencyMs || 0,
     tokenUsage: context.tokenUsage || null,
   };
@@ -1600,6 +1627,7 @@ output = payload.get("output", "")
 expected = payload.get("expected", "")
 prompt = payload.get("prompt", "")
 vars = payload.get("vars", {})
+config = payload.get("config", {})
 context = payload.get("context", {})
 code = payload.get("code", "")
 result = None
@@ -1616,6 +1644,9 @@ except AssertionError as error:
 except Exception as error:
     print(json.dumps({"ok": False, "error": str(error)}))
 `;
+  // Real promptfoo exposes assertion.config as context.config (and a bare `config` binding) to
+  // custom-grading scripts — same mechanism just added to the JS assertion path above.
+  const config = assertion.config && typeof assertion.config === 'object' ? assertion.config : {};
   const stdout = await runChildProcess(
     process.env.PYTHON_BIN || 'python3',
     ['-c', wrapper],
@@ -1624,7 +1655,8 @@ except Exception as error:
       expected: assertion.expected || assertion.value || '',
       prompt: context.prompt || '',
       vars: context.vars || {},
-      context,
+      config,
+      context: { ...context, config },
       code: String(assertion.value || 'False'),
     }),
     Number(assertion.timeoutMs || assertion.timeout || 5000),
