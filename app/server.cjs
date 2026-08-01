@@ -2913,10 +2913,9 @@ async function callCohere({ baseUrl, model, apiKey, systemPrompt, prompt, temper
       model,
       temperature,
       max_tokens: maxTokens,
-      messages: [
-        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        { role: 'user', content: prompt },
-      ],
+      // Cohere's v2 chat API accepts the same {role, content} message shape as OpenAI, so a
+      // scripted multi-turn JSON prompt works here identically to buildChatMessages' other callers.
+      messages: buildChatMessages(prompt, systemPrompt),
     }),
   });
   const bodyText = await response.text();
@@ -2937,6 +2936,27 @@ async function callCohere({ baseUrl, model, apiKey, systemPrompt, prompt, temper
   };
 }
 
+// Gemini's API uses a differently-shaped conversation than the OpenAI-style adapters: content
+// blocks (`{role, parts: [{text}]}` instead of `{role, content}`), assistant turns are role
+// `'model'` not `'assistant'`, and system goes in its own top-level `systemInstruction` field
+// (same rationale as Anthropic) rather than as a message role.
+function buildGeminiRequest(prompt, systemPrompt) {
+  const parsed = parseChatMessagesPrompt(prompt);
+  const rawMessages = parsed || [{ role: 'user', content: prompt }];
+  const systemFromPrompt = rawMessages.find((message) => message.role === 'system')?.content;
+  const contents = rawMessages
+    .filter((message) => message.role !== 'system')
+    .map((message) => ({
+      role: message.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: message.content }],
+    }));
+  const effectiveSystem = systemFromPrompt || systemPrompt;
+  return {
+    contents,
+    ...(effectiveSystem ? { systemInstruction: { parts: [{ text: effectiveSystem }] } } : {}),
+  };
+}
+
 async function callGemini({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens }) {
   if (!baseUrl) throw new Error('Gemini base URL is required');
   if (!model) throw new Error('Gemini model is required');
@@ -2945,8 +2965,7 @@ async function callGemini({ baseUrl, model, apiKey, systemPrompt, prompt, temper
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      ...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}),
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      ...buildGeminiRequest(prompt, systemPrompt),
       generationConfig: {
         temperature,
         maxOutputTokens: maxTokens,

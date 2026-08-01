@@ -2625,3 +2625,39 @@ this loop, not an unlimited test double.
       not just the final question in isolation. Also reran the
       target's restored plain single-turn config afterward and
       confirmed zero regression (`READY`, pass, exactly as before).
+
+## Change log — iteration 51 (multi-turn support: Gemini + Cohere)
+
+69. Closes the follow-up gap explicitly flagged at the end of
+    iteration 50: `callGemini`/`callCohere` still hardcoded single-turn
+    messages.
+    - **Cohere**: turned out to need zero shape translation — Cohere's
+      v2 chat API already accepts the identical `{role, content}`
+      message array as the OpenAI-shaped adapters, so `callCohere` now
+      just calls the same `buildChatMessages()` used by
+      openai-compatible/azure/anthropic. No new code, no new bug
+      surface.
+    - **Gemini**: genuinely different shape — content blocks
+      (`{role, parts: [{text}]}` instead of `{role, content}`),
+      assistant turns are role `'model'` not `'assistant'`, and system
+      goes in a separate top-level `systemInstruction` field (same
+      constraint as Anthropic). Added `buildGeminiRequest()` doing that
+      translation, cross-checked its role-mapping and field-naming
+      directly against real promptfoo's own Gemini provider
+      (`providers/google/provider.ts`/`types.ts`) rather than guessed.
+    - **Verification honesty**: this environment has no Gemini or
+      Cohere API key configured on any target, so — unlike every other
+      change this session — this one could NOT be live-verified with a
+      real HTTP call. Instead verified `buildGeminiRequest()` in
+      isolation (pure, dependency-free data transformation) against
+      three cases: plain single-turn backward-compat, a multi-turn
+      scripted conversation, and a conversation carrying its own system
+      message overriding the provider's configured one — all three
+      produced exactly the correct shape. Cohere needed no isolated
+      test since it now reuses `buildChatMessages()` verbatim, the same
+      function iteration 50 already verified live against the real Groq
+      API. Re-ran the E2E target's real config afterward to confirm
+      zero regression on the actually-tested openai-compatible path.
+      Flagging this explicitly rather than implying live coverage it
+      doesn't have: a real Gemini/Cohere key would be needed to fully
+      close this out.
