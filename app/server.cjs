@@ -541,6 +541,11 @@ function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValu
         // grading AND native-engine-mode configs built from these normalized assertions, since
         // by the time they reach the real promptfoo CLI the tag was already gone.
         metric: assertion.metric,
+        // Real promptfoo's per-assertion `transform` ("process the output before running the
+        // assertion") — distinct from the test-level options.transform this product already
+        // supports (which runs once, before every assertion). Lets different assertions on the
+        // same test check different transformed views of the same raw output.
+        transform: assertion.transform,
       }))
       .filter((assertion) => assertion.type);
   }
@@ -2258,6 +2263,22 @@ async function evaluateAssertion(output, assertion = {}, context = {}) {
 }
 
 async function evaluateAssertionCore(output, assertion = {}, context = {}) {
+  // Real promptfoo's per-assertion `transform` — processes the output specifically for THIS
+  // assertion, before grading, distinct from (and layered on top of) the test-level
+  // options.transform already applied once upstream in executeEvalRun. Errors fall back to the
+  // untransformed output rather than failing the whole row, matching how the test-level
+  // transform's own failure is surfaced (as an assertion error) rather than silently here.
+  if (assertion.transform) {
+    try {
+      output = applyOutputTransform(output, assertion.transform, {
+        vars: context.vars,
+        prompt: context.prompt,
+        rawResponse: context.providerResponse?.rawResponse,
+      });
+    } catch (error) {
+      return { pass: false, score: 0, error: `Assertion transform failed: ${error.message}` };
+    }
+  }
   const actual = String(output || '');
   const assertionType = String(assertion.type || 'contains');
   if (typeof assertion.value === 'string' && context.vars) {

@@ -2015,6 +2015,12 @@ function EvalWorkspace({
                         placeholder="Metric name (optional)"
                         title="Groups this assertion's score with any others sharing the same metric name into a weighted-average named score shown on the run summary."
                       />
+                      <input
+                        value={assertion.transform || ''}
+                        onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { transform: event.target.value || undefined })}
+                        placeholder="Transform (optional, JS expression)"
+                        title="Processes output specifically for this assertion before grading — e.g. JSON.parse(output).field — separate from the case-level output transform above, which applies to every assertion."
+                      />
                       <button
                         className="ghost-button"
                         type="button"

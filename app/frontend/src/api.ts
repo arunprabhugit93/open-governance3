@@ -34,6 +34,7 @@ export interface EvalAssertion {
   threshold?: number;
   weight?: number;
   metric?: string;
+  transform?: string;
   assert?: Array<{ type: string; value: string; weight?: number; metric?: string }>;
 }
 

@@ -3446,3 +3446,45 @@ this loop, not an unlimited test double.
       target's original single-assertion config byte-for-byte
       afterward and confirmed the baseline passes as before. `tsc
       --noEmit` and the production `vite build` both passed clean.
+
+## Change log — iteration 69 (per-assertion `transform` — distinct from the existing test-level transform)
+
+87. Third consecutive "documented real-promptfoo Assertion/TestCase
+    field, unimplemented and stripped by normalizeAssertions" gap
+    found via the same source-reading method as iterations 67-68.
+    Real promptfoo's `Assertion.transform` ("process the output
+    before running the assertion") is genuinely distinct from the
+    test-level `options.transform` this product already had: the
+    test-level one runs ONCE, before every assertion in the test; the
+    per-assertion one runs separately for EACH assertion that sets it,
+    letting different assertions on the same test grade different
+    transformed views of the same raw output (e.g. one assertion
+    checks the raw text, another checks `JSON.parse(output).field`)
+    without duplicating test cases. `normalizeAssertions()` dropped
+    the field entirely (same root cause as `metric` in iteration 67),
+    and `evaluateAssertionCore` never read it even if it had survived.
+    - Preserved `transform` through `normalizeAssertions()`.
+    - Applied it at the top of `evaluateAssertionCore`, reusing the
+      existing `applyOutputTransform()` helper (same one the
+      test-level transform already uses) — a transform error returns
+      a failed/errored assertion result rather than throwing and
+      killing the whole row, matching this function's existing
+      per-case error handling elsewhere.
+    - Native-engine-mode needed no change: `nativeAssertion()` already
+      passes arbitrary fields through unchanged, and real promptfoo's
+      own engine has native `Assertion.transform` support.
+    - Added a "Transform (optional, JS expression)" field to the
+      per-assertion editor row, next to the metric field added in
+      iteration 67. Extended `EvalAssertion` in `api.ts`.
+    - Verified live against the real Groq-backed E2E reference target:
+      set the baseline assertion to `contains: "ready"` (lowercase)
+      with `transform: "output.toLowerCase()"` against the real
+      response `"READY"` — passed, and confirmed the row's own stored
+      `output` field still showed the untransformed `"READY"` (the
+      transform is assertion-local, not applied to the row display).
+      Removed only the `transform` field with the same lowercase
+      assertion value and confirmed it correctly FAILED under the
+      untransformed comparison — proving the transform was the
+      deciding factor. Restored the target's original config
+      byte-for-byte and confirmed the baseline passes as before. `tsc
+      --noEmit` and the production `vite build` both passed clean.
