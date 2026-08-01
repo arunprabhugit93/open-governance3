@@ -463,6 +463,15 @@ h3 {
   cursor: help;
 }
 
+.badge-warning {
+  background: #fff4e5;
+  color: #92610d;
+  margin-left: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
 .plan {
   display: grid;
   gap: 8px;

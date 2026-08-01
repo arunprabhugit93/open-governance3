@@ -85,6 +85,10 @@ export interface WorkflowCatalogItem {
   label: string;
   description?: string;
   category?: string;
+  // Plugins/strategies only: true when real promptfoo has no local generation path for this
+  // one at all (mirrors its own REMOTE_ONLY_PLUGIN_IDS/STRATEGIES_REQUIRING_REMOTE) - real
+  // generation silently produces zero cases for it whenever remote generation is unavailable.
+  remoteOnly?: boolean;
 }
 
 export interface WorkflowCatalogResponse {
@@ -93,6 +97,7 @@ export interface WorkflowCatalogResponse {
   redteamStrategies: WorkflowCatalogItem[];
   auditScanners: WorkflowCatalogItem[];
   auditBaselineChecks: WorkflowCatalogItem[];
+  redteamRemoteGenerationDisabled: boolean;
 }
 
 export interface EvalRun {

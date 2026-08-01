@@ -278,6 +278,7 @@ const emptyWorkflowCatalog: WorkflowCatalogResponse = {
   redteamStrategies: [],
   auditScanners: [],
   auditBaselineChecks: [],
+  redteamRemoteGenerationDisabled: false,
 };
 
 function Shell({
@@ -2337,6 +2338,14 @@ function RedTeamWorkspace({
               </button>
             </div>
           </div>
+          {useRealGeneration && workflowCatalog.redteamRemoteGenerationDisabled ? (
+            <p className="field-help">
+              ⚠ Plugins marked <strong>remote only</strong> have no local generation path in
+              promptfoo itself — with real generation on and this server's remote generation
+              disabled, selecting one will silently generate 0 cases for it (surfaced after the
+              run as a warning, but avoidable by deselecting it here first).
+            </p>
+          ) : null}
           <div className="option-grid">
             {visiblePlugins.map((plugin) => (
               <label className="option-tile" key={plugin.key}>
@@ -2346,7 +2355,12 @@ function RedTeamWorkspace({
                   onChange={() => setPlugins((current) => toggleValue(current, plugin.key))}
                 />
                 <span>
-                  <strong>{plugin.label}</strong>
+                  <strong>
+                    {plugin.label}
+                    {plugin.remoteOnly && useRealGeneration && workflowCatalog.redteamRemoteGenerationDisabled ? (
+                      <span className="badge badge-warning"> remote only</span>
+                    ) : null}
+                  </strong>
                   <small>{plugin.category}</small>
                 </span>
               </label>
@@ -2371,7 +2385,12 @@ function RedTeamWorkspace({
                   onChange={() => setStrategies((current) => toggleValue(current, strategy.key))}
                 />
                 <span>
-                  <strong>{strategy.label}</strong>
+                  <strong>
+                    {strategy.label}
+                    {strategy.remoteOnly && useRealGeneration && workflowCatalog.redteamRemoteGenerationDisabled ? (
+                      <span className="badge badge-warning"> remote only</span>
+                    ) : null}
+                  </strong>
                 </span>
               </label>
             ))}

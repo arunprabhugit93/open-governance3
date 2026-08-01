@@ -2109,3 +2109,51 @@ this loop, not an unlimited test double.
       remote-only plugins/strategies in the UI itself, so a user
       wouldn't need to hit this failure message to find out) remains
       open as a follow-up.
+
+## Change log — iteration 41 (flag remote-only red-team plugins/strategies in the UI)
+
+59. Fifth and last item from the same external audit: real promptfoo's
+    own `REMOTE_ONLY_PLUGIN_IDS`/`STRATEGIES_REQUIRING_REMOTE` constants
+    (`promptfoo-source/src/redteam/constants/plugins.ts` and
+    `strategies.ts`) were never read, filtered, or surfaced anywhere in
+    this product — a user turning on "Use real adversarial generation"
+    had no way to know, before running, that roughly half the plugin
+    catalog and about a quarter of strategies have zero local generation
+    path in the real engine and would silently produce 0 cases under
+    this project's own `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true`
+    — closes the loop opened by iteration 40's
+    `realGenerationFallbackReason` (which tells you *after* a run;
+    this tells you *before* one).
+    - Transcribed real promptfoo's exact plugin/strategy ID lists into
+      `workflow-catalog.cjs` as two `Set`s (`REDTEAM_REMOTE_ONLY_PLUGIN_KEYS`
+      — 78 keys, `REDTEAM_REMOTE_ONLY_STRATEGY_KEYS` — 10 keys) and flag
+      matching catalog entries with `remoteOnly: true` in a small post-
+      processing pass (not hand-editing ~90 individual catalog lines).
+      Coding-agent-only remote plugins deliberately omitted — this
+      product's catalog doesn't include coding-agent plugins at all.
+    - Exposed a new `redteamRemoteGenerationDisabled` boolean on
+      `/api/workflow-catalog`, reading this project's own
+      `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION` env var — so the
+      warning only shows when it's actually going to matter, not
+      unconditionally on every deployment.
+    - Frontend: when "Use real adversarial generation" is checked *and*
+      remote generation is disabled server-side, every `remoteOnly`
+      plugin/strategy tile in the Red-team workspace picker now shows a
+      small "remote only" warning badge, plus an explanatory note above
+      the plugin grid. Hidden entirely otherwise (real generation off, or
+      remote generation actually available) — the badge only appears when
+      it's a genuine, actionable warning, not noise on every visit.
+    - Verified live in the real browser (not just code review): logged in
+      as the real admin session, opened the E2E target's Red-team
+      workspace, confirmed zero warning badges with the checkbox
+      unchecked, checked "Use real adversarial generation" via a real DOM
+      click event (not directly setting React state) and confirmed
+      exactly 88 badges appeared (78 + 10 — matching the catalog counts
+      precisely) including on `system-prompt-override` specifically (the
+      same plugin iteration 40's fallback-reason test caught actually
+      failing under real generation), then unchecked it again and
+      confirmed all 88 disappeared. This was a local, unsaved UI toggle
+      throughout — confirmed the E2E target's real stored config was
+      untouched by re-fetching it afterward, then reran the target's
+      real red-team stage to confirm zero regression (still 5/5 pass).
+      This closes all five items from the external audit.

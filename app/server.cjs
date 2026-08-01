@@ -4977,6 +4977,9 @@ app.get('/api/workflow-catalog', requireAuth, (_req, res) => {
     redteamStrategies: REDTEAM_STRATEGIES,
     auditScanners: AUDIT_SCANNERS,
     auditBaselineChecks: AUDIT_BASELINE_CHECKS,
+    // Lets the UI warn about `remoteOnly`-flagged plugins/strategies *before* a run, not just
+    // after seeing a run's realGenerationFallbackReason.
+    redteamRemoteGenerationDisabled: String(process.env.PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION || '').toLowerCase() === 'true',
   });
 });
 

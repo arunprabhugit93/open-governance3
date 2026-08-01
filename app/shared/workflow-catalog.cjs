@@ -253,6 +253,57 @@ const REDTEAM_STRATEGIES = [
   { key: 'encoded', label: 'Encoded attack (legacy)' },
 ];
 
+// Mirrors real promptfoo's own REMOTE_ONLY_PLUGIN_IDS / STRATEGIES_REQUIRING_REMOTE
+// (promptfoo-source/src/redteam/constants/plugins.ts and strategies.ts) — these have no local
+// generation logic at all in the real engine, so "Use real adversarial generation" silently
+// produces zero test cases for them whenever remote generation is unavailable (e.g. this
+// project's own .env sets PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true). Flagging them in
+// the catalog lets the UI warn *before* a run, rather than only after seeing the
+// realGenerationFallbackReason on a run that already came back with fewer cases than expected.
+// (promptfoo's coding-agent-only remote plugins are omitted — this catalog doesn't include
+// coding-agent plugins at all.)
+const REDTEAM_REMOTE_ONLY_PLUGIN_KEYS = new Set([
+  'agentic:memory-poisoning', 'ascii-smuggling', 'bfla', 'bola', 'cca', 'competitors', 'coppa',
+  'data-exfil', 'ferpa', 'goal-misalignment', 'harmful:misinformation-disinformation',
+  'harmful:specialized-advice', 'hijacking', 'indirect-prompt-injection', 'mcp',
+  'model-identification', 'off-topic', 'rag-document-exfiltration', 'rag-poisoning',
+  'rag-source-attribution', 'reasoning-dos', 'religion', 'special-token-injection', 'ssrf',
+  'system-prompt-override', 'wordplay',
+  'medical:anchoring-bias', 'medical:fda:ai-disclosure', 'medical:fda:cyber-access-control',
+  'medical:fda:cyber-audit-tampering', 'medical:hallucination', 'medical:incorrect-knowledge',
+  'medical:off-label-use', 'medical:prioritization-error', 'medical:sycophancy',
+  'financial:calculation-error', 'financial:compliance-violation',
+  'financial:confidential-disclosure', 'financial:counterfactual', 'financial:data-leakage',
+  'financial:defamation', 'financial:hallucination', 'financial:impartiality',
+  'financial:japan-fiea-suitability', 'financial:misconduct', 'financial:sox-compliance',
+  'financial:sycophancy',
+  'pharmacy:controlled-substance-compliance', 'pharmacy:dosage-calculation',
+  'pharmacy:drug-interaction',
+  'insurance:coverage-discrimination', 'insurance:data-disclosure',
+  'insurance:network-misinformation', 'insurance:phi-disclosure',
+  'ecommerce:compliance-bypass', 'ecommerce:order-fraud', 'ecommerce:pci-dss',
+  'ecommerce:price-manipulation',
+  'telecom:cpni-disclosure', 'telecom:location-disclosure', 'telecom:account-takeover',
+  'telecom:e911-misinformation', 'telecom:tcpa-violation', 'telecom:unauthorized-changes',
+  'telecom:fraud-enablement', 'telecom:porting-misinformation', 'telecom:billing-misinformation',
+  'telecom:coverage-misinformation', 'telecom:law-enforcement-request-handling',
+  'telecom:accessibility-violation',
+  'realestate:fair-housing-discrimination', 'realestate:steering',
+  'realestate:discriminatory-listings', 'realestate:lending-discrimination',
+  'realestate:valuation-bias', 'realestate:accessibility-discrimination',
+  'realestate:advertising-discrimination', 'realestate:source-of-income',
+]);
+const REDTEAM_REMOTE_ONLY_STRATEGY_KEYS = new Set([
+  'audio', 'citation', 'gcg', 'goat', 'indirect-web-pwn', 'jailbreak:composite',
+  'jailbreak:goblin', 'jailbreak:hydra', 'jailbreak:likert', 'jailbreak:meta',
+]);
+for (const plugin of REDTEAM_PLUGINS) {
+  if (REDTEAM_REMOTE_ONLY_PLUGIN_KEYS.has(plugin.key)) plugin.remoteOnly = true;
+}
+for (const strategy of REDTEAM_STRATEGIES) {
+  if (REDTEAM_REMOTE_ONLY_STRATEGY_KEYS.has(strategy.key)) strategy.remoteOnly = true;
+}
+
 // Genuinely optional — gated on `audit.scanners` in executeModelAuditRun, so selecting or
 // deselecting one of these actually changes what runs.
 const AUDIT_SCANNERS = [
