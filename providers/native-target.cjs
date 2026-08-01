@@ -424,34 +424,55 @@ module.exports = class NativeTargetProvider {
   async callHttpJson(prompt) {
     const baseUrl = this.baseUrl();
     if (!baseUrl) return { error: 'HTTP JSON endpoint URL is required' };
+    // Mirrors server.cjs's callHttpJson: custom method/headers/body/responsePath via
+    // libraryConfig, falling back to the original fixed body shape when unset.
+    const config = parseLibraryConfig(this.config.libraryConfig, 'method/headers/body/responsePath');
+    const context = {
+      prompt,
+      input: prompt,
+      model: this.model(),
+      systemPrompt: this.systemPrompt(),
+      temperature: this.config.temperature ?? 0,
+      maxTokens: this.config.maxTokens ?? 512,
+    };
+    const method = String(config.method || 'POST').toUpperCase();
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(this.apiKey() ? { Authorization: `Bearer ${this.apiKey()}` } : {}),
+      ...(config.headers ? deepTemplateSubstitute(config.headers, context) : {}),
+    };
+    const requestBody =
+      config.body !== undefined
+        ? deepTemplateSubstitute(config.body, context)
+        : {
+            prompt,
+            input: prompt,
+            model: this.model(),
+            systemPrompt: this.systemPrompt(),
+            temperature: this.config.temperature ?? 0,
+            maxTokens: this.config.maxTokens ?? 512,
+            messages: this.messages(prompt),
+          };
     const response = await fetch(baseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.apiKey() ? { Authorization: `Bearer ${this.apiKey()}` } : {}),
-      },
-      body: JSON.stringify({
-        prompt,
-        input: prompt,
-        model: this.model(),
-        systemPrompt: this.systemPrompt(),
-        temperature: this.config.temperature ?? 0,
-        maxTokens: this.config.maxTokens ?? 512,
-        messages: this.messages(prompt),
-      }),
+      method,
+      headers,
+      ...(method !== 'GET' && method !== 'HEAD'
+        ? { body: typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody) }
+        : {}),
     });
     const bodyText = await response.text();
     const body = parseBody(bodyText);
     if (!response.ok) return { error: body.error?.message || body.message || bodyText || `HTTP ${response.status}` };
-    const output =
-      body.output ||
-      body.response ||
-      body.answer ||
-      body.text ||
-      body.message?.content ||
-      body.choices?.[0]?.message?.content ||
-      body.raw ||
-      '';
+    const output = config.responsePath
+      ? getByPath(body, config.responsePath)
+      : body.output ||
+        body.response ||
+        body.answer ||
+        body.text ||
+        body.message?.content ||
+        body.choices?.[0]?.message?.content ||
+        body.raw ||
+        '';
     return {
       output: typeof output === 'string' ? output : JSON.stringify(output),
       tokenUsage: body.usage,

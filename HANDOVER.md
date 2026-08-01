@@ -2967,3 +2967,32 @@ this loop, not an unlimited test double.
       request body, unchanged. Restored the target's original provider
       config afterward and confirmed a clean regression run against the
       real E2E Groq target.
+
+## Change log — iteration 59 (native-engine-mode parity for the HTTP-JSON fix)
+
+77. Direct follow-up to iteration 58: `providers/native-target.cjs`
+    has its own separate `callHttpJson` method (used when a target
+    runs in native-engine mode, via the real installed promptfoo CLI)
+    that mirrored the exact same fixed-shape-only limitation the
+    direct-mode adapter just had fixed — no `libraryConfig` support at
+    all. Same gap this session has now hit three times in the
+    GraphQL/WebSocket/HTTP-JSON family, this time in the native-mode
+    twin rather than a different adapter.
+    - Ported the identical fix: optional `libraryConfig` with
+      `method`/`headers`/`body`/`responsePath`, using the same
+      `deepTemplateSubstitute`/`getByPath`/`parseLibraryConfig` helpers
+      already present in this file (from iteration 56's native-mode
+      Nunjucks parity work), falling back to the exact original fixed
+      body shape when unset.
+    - Verified live via a real HTTP round trip, and more directly than
+      usual: instantiated the `NativeTargetProvider` class straight
+      from the file (`require('./providers/native-target.cjs')`) and
+      called `.callApi()` against a real local mock server — no CLI
+      invocation needed since the class itself is a plain, directly
+      testable unit. Confirmed a custom `body: {msg: "{{prompt |
+      upper}}"}` + `responsePath: "result.answer"` config produced
+      `output: "native-reply: HELLO NATIVE"` (filter applied
+      correctly, nested path extracted correctly), then confirmed a
+      config with no `libraryConfig` sent the exact original fixed
+      body shape (including the target's real configured
+      `systemPrompt` text) unchanged.
