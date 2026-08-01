@@ -139,6 +139,7 @@ export interface EvalRun {
       namedScores?: Record<string, number>;
       finishReason?: string | null;
       rawResponse?: unknown;
+      vars?: Record<string, unknown>;
     }>;
   };
   error: string | null;
@@ -245,6 +246,7 @@ export interface RunTraceRow {
   assertions: Array<Record<string, unknown>>;
   finishReason: string | null;
   rawResponse: unknown;
+  vars: Record<string, unknown>;
 }
 
 export interface TargetReport {

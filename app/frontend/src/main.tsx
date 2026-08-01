@@ -2337,6 +2337,12 @@ function EvalWorkspace({
                 <strong>{row.test}</strong>
                 <p>{row.output || row.error}</p>
                 {row.finishReason ? <p className="muted">Finish reason: {row.finishReason}</p> : null}
+                {row.vars && Object.keys(row.vars).length ? (
+                  <details>
+                    <summary>View variables</summary>
+                    <pre className="config-preview">{JSON.stringify(row.vars, null, 2)}</pre>
+                  </details>
+                ) : null}
                 {row.rawResponse !== undefined && row.rawResponse !== null ? (
                   <details>
                     <summary>View raw provider response</summary>
@@ -3911,6 +3917,12 @@ function EvidenceWorkspace({
                     <>
                       <dt>Finish reason</dt>
                       <dd>{row.finishReason}</dd>
+                    </>
+                  ) : null}
+                  {row.vars && Object.keys(row.vars).length ? (
+                    <>
+                      <dt>Variables</dt>
+                      <dd>{JSON.stringify(row.vars)}</dd>
                     </>
                   ) : null}
                 </dl>

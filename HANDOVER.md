@@ -3242,3 +3242,62 @@ this loop, not an unlimited test double.
       React root — so the DOM-level check stands in for a visual one
       here). `tsc --noEmit` and the production `vite build` both passed
       clean.
+
+## Change log — iteration 65 (eval rows: surface captured-but-discarded vars)
+
+83. Same shape of gap as iteration 64, found by re-applying the exact
+    same trace-a-field methodology to `task.vars` instead of
+    `result.rawResponse`: `executeEvalRun()`'s `mapLimit` callback
+    already threads `task.vars` into the `beforeEach`/`afterEach`
+    extension-hook contexts, the output-transform context, and the
+    assertion-grading context — but none of the four eval
+    row-construction return sites included it, so the concrete
+    variable values that actually produced a given row (relevant for
+    bulk-imported datasets, `defaultTest.vars`, scenario-expanded
+    tests, and extension-hook-mutated vars) were computed and then
+    discarded. `buildRunTrace()` had a related but distinct gap on the
+    read side: red-team's row-building loop (`executeRedTeamRun`,
+    unlike eval) already *did* put `vars: caseItem.vars || {}` on its
+    rows — but `buildRunTrace()` never mapped `row.vars` at all for
+    *any* stage, so the one cross-stage "Run trace" detail view was
+    silently dropping vars data that red-team rows had been capturing
+    all along, and would have kept dropping it for eval rows even
+    after fixing the write side above.
+    - Added `vars: task.vars` to all four eval row-construction sites
+      in `executeEvalRun`, and `vars: row.vars || {}` to
+      `buildRunTrace()`'s per-row mapping (a plain default, not
+      truncated — unlike raw provider responses, template vars are
+      author-controlled and already bounded by the test-case editor).
+    - Extended `RunTraceRow` and `EvalRun.results.rows[]` in
+      `types.ts`; added a collapsible "View variables" block to the
+      Eval workspace's "Latest run" results table and a "Variables"
+      line to the "Run trace" detail view, both gated on the vars
+      object being non-empty (matches the existing `rawResponse`
+      pattern from iteration 64 rather than inventing a new one).
+    - Ruled out several other candidate gaps first by reading real
+      promptfoo's own source rather than guessing: assertion
+      `threshold` handling (already correctly wired for
+      answer-relevance/context-recall/context-relevance/context-faithfulness
+      /cost/similar/assert-set), the generic `not-X` assertion-type
+      inversion (already handled by a prefix-strip-and-invert branch,
+      not a per-type switch case, so `not-icontains` etc. were never
+      actually missing), the `retry` red-team strategy (real
+      promptfoo's own `retry` strategy is DB-driven regression
+      testing — re-run previously-failed probes — and this product's
+      existing generic "Rerun failures" endpoint already provides the
+      same outcome for red-team runs via `shouldIncludeInRerun`, so a
+      no-op local prompt-transform for the `retry` strategy key is
+      correct, not a bug), and the `custom` red-team strategy (real
+      promptfoo's own local `custom` strategy transform is also just a
+      passthrough — the actual attack logic lives in a remote
+      `promptfoo:redteam:custom` provider — so parity here means
+      staying a no-op, not adding one).
+    - Verified live against the real Groq-backed E2E reference target:
+      ran a real eval via the actual REST API and confirmed the
+      returned row and the `/runs/:id` trace endpoint both carried
+      `vars: {"prompt": "Reply with exactly: READY"}`; separately
+      fetched an existing real red-team run's trace and confirmed
+      `vars` is now present in the trace row shape (correctly `{}` for
+      that run's cases, which is accurate — this target's red-team
+      config has no `defaultTest.vars` set). `tsc --noEmit` and the
+      production `vite build` both passed clean.

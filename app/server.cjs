@@ -584,6 +584,7 @@ function buildRunTrace(run) {
     assertions: row.assertions || [],
     finishReason: row.finishReason || null,
     rawResponse: row.rawResponse ?? null,
+    vars: row.vars || {},
   }));
 }
 
@@ -3932,6 +3933,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
           cacheHit: false,
           cacheKey: '',
           latencyMs: Date.now() - started,
+          vars: task.vars,
         };
       }
     }
@@ -4048,6 +4050,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
             tokenUsage: result.tokenUsage,
             finishReason: result.finishReason || null,
             rawResponse: truncateRawResponseForStorage(result.rawResponse),
+            vars: task.vars,
           };
         }
       }
@@ -4070,6 +4073,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         tokenUsage: result.tokenUsage,
         finishReason: result.finishReason || null,
         rawResponse: truncateRawResponseForStorage(result.rawResponse),
+        vars: task.vars,
       };
     } catch (error) {
       return {
@@ -4089,6 +4093,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         finishReason: result?.finishReason || null,
         rawResponse: truncateRawResponseForStorage(result?.rawResponse),
         latencyMs: Date.now() - started,
+        vars: task.vars,
       };
     }
   }, async () => isRunCancellationRequested(execution.runId));
