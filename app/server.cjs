@@ -4504,6 +4504,26 @@ async function generateRealRedTeamCases(target, plugins, strategies, purpose, nu
 // generate() first). Since real generation always runs before grading in the same request,
 // this ordering is naturally satisfied whenever it's used; local-template probes keep using
 // this product's own assessRedTeamOutput instead, which needs no such warm-up.
+// Real promptfoo's actual per-plugin grader registry is keyed 'promptfoo:redteam:<pluginId>'
+// (confirmed against the installed npm package: 152 entries, e.g.
+// 'promptfoo:redteam:excessive-agency', 'promptfoo:redteam:bola'). Locally-templated probes
+// (buildRedTeamCasesLocal) previously had no `assertType` at all, so they always fell back to
+// the generic keyword-refusal heuristic even though this same real, sophisticated grading logic
+// was already wired up and working for "Use real adversarial generation" cases. Only tag a row
+// when a real grader genuinely exists for its plugin, so gradeWithRealGrader's own
+// `if (!grader) return null` fallback stays meaningful rather than firing on every row.
+function realGraderAssertType(plugin) {
+  try {
+    const pf = loadPromptfooLibrary();
+    const key = `promptfoo:redteam:${plugin}`;
+    return pf.redteam?.Graders?.[key] ? key : undefined;
+  } catch (error) {
+    // Never let a broken/missing promptfoo install take down basic local red-team case
+    // generation, which otherwise has no dependency on this library at all.
+    return undefined;
+  }
+}
+
 async function gradeWithRealGrader(target, provider, purpose, caseItem, output) {
   if (!caseItem.assertType) return null;
   const pf = loadPromptfooLibrary();
@@ -4513,7 +4533,13 @@ async function gradeWithRealGrader(target, provider, purpose, caseItem, output) 
     metadata: { purpose, pluginId: caseItem.plugin },
     vars: { prompt: caseItem.prompt },
   };
-  const result = await grader.getResult(caseItem.prompt, output, test, provider, undefined, undefined, false, {});
+  // Real promptfoo passes each plugin's own precisely-extracted assertion value here (e.g.
+  // indirect-prompt-injection's grader rubric renders it as the specific injected instruction
+  // text via {{value}}) — this product's local probes don't track that separately per plugin,
+  // so the full prompt is the closest safe approximation that still keeps the judge grounded in
+  // real content instead of leaving `{{value}}` undefined, which throws (Nunjucks strict mode)
+  // in every rubric that references it.
+  const result = await grader.getResult(caseItem.prompt, output, test, provider, caseItem.prompt, undefined, false, {});
   if (!result?.grade) return null;
   return {
     pass: Boolean(result.grade.pass),
@@ -4797,6 +4823,7 @@ function buildRedTeamCasesLocal(target, plugins, strategies, numTests, purpose) 
             ? 'critical'
             : 'medium',
         source: 'generated',
+        assertType: realGraderAssertType(plugin),
         expectedRefusalMarkers: [
           'cannot',
           "can't",
@@ -4925,10 +4952,13 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
   const timeoutMs = Math.max(1000, Number(effectiveRunOptions.timeoutMs || 30000));
   const maxCharsPerMessage = Math.max(0, Number(redteam.maxCharsPerMessage || effectiveRunOptions.maxCharsPerMessage || 0));
 
-  // Only construct a grading provider instance if there's actually a real-generated case to
-  // grade with it — avoids the extra work/risk for the common local-template-only run.
+  // Only construct a grading provider instance if some case actually has a matching real
+  // promptfoo grader to use it with — covers both "Use real adversarial generation" cases AND
+  // locally-templated ones now that buildRedTeamCasesLocal tags rows with a real grader's
+  // assertType whenever one exists for that plugin (see realGraderAssertType) — avoids the
+  // extra work/risk when nothing in this run can actually use it.
   let gradingProvider = null;
-  if (cases.some((c) => c.source === 'generated-live' && c.assertType)) {
+  if (cases.some((c) => c.assertType)) {
     try {
       const evalProviders = target.metadata?.eval?.providers || [];
       const genProvider = evalProviders[0];
@@ -4969,7 +4999,7 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
           'Red-team provider call',
         );
         let assessment = null;
-        if (gradingProvider && caseItem.source === 'generated-live') {
+        if (gradingProvider && caseItem.assertType) {
           assessment = await gradeWithRealGrader(target, gradingProvider, redteamPurpose, caseItem, result.output).catch(
             (error) => {
               console.error(`Real grading failed for ${caseItem.plugin}, falling back to local grading:`, error.message);

@@ -3542,3 +3542,75 @@ this loop, not an unlimited test double.
       byte-for-byte afterward and confirmed the baseline is unchanged.
       `tsc --noEmit` and the production `vite build` both passed
       clean.
+
+## Change log — iteration 71 (red-team: real promptfoo Graders for local probes too)
+
+89. A larger-impact gap than the assertion-schema fields fixed in the
+    last four iterations — this one touches the grading QUALITY of
+    the entire red-team feature. `executeRedTeamRun` already delegates
+    to real promptfoo's own `Graders` registry
+    (`gradeWithRealGrader` → `pf.redteam.Graders[assertType]`) — real,
+    published, plugin-specific grading logic, not a reimplementation —
+    but only for cases sourced from "Use real adversarial generation"
+    (`source === 'generated-live'`). The default, far more common path
+    (`buildRedTeamCasesLocal`'s local template probes, used whenever
+    real generation is off, which it is by default) never had
+    `assertType` set at all, so EVERY locally-templated probe always
+    fell back to a single generic 4-bucket keyword-refusal heuristic
+    (`assessRedTeamOutput`) — even for the ~70 plugins whose actual
+    real-promptfoo grader was already sitting right there, unused.
+    Confirmed against the actual installed `promptfoo` npm package
+    (not just source-reading): `pf.redteam.Graders` has 152 entries
+    keyed `promptfoo:redteam:<pluginId>`.
+    - Added `realGraderAssertType(plugin)` — looks up
+      `promptfoo:redteam:${plugin}` in the real Grader registry, wrapped
+      in try/catch so a broken/missing promptfoo install can't take
+      down basic local case generation (which previously had zero
+      dependency on the library at all).
+    - Wired it into every row `buildRedTeamCasesLocal` builds.
+    - Relaxed `executeRedTeamRun`'s two `source === 'generated-live'`
+      gates (grading-provider construction, and the per-case grading
+      dispatch) to just check `assertType` is present — covers both
+      real-generation and local-template cases uniformly. The
+      pre-existing per-case fallback to the heuristic grader (on a
+      missing grader, a thrown error, or no `assessment` at all) was
+      already correct and needed no changes — it now also covers the
+      newly-common case of a local probe with no matching real grader.
+    - Found and fixed a real bug in `gradeWithRealGrader` itself while
+      verifying live: it called `grader.getResult(...)` with
+      `renderedValue` hardcoded to `undefined`. Real promptfoo's own
+      grader rubrics commonly template `{{value}}` from this argument
+      (e.g. `indirect-prompt-injection`'s rubric —
+      `<InjectedInstructions>{{value}}</InjectedInstructions>`) under
+      Nunjucks strict/throw-on-undefined mode, so every such grader
+      call was throwing and silently falling back to the heuristic —
+      this was ALSO already broken for the pre-existing
+      real-generation-live path, not something this iteration
+      introduced. Fixed by passing `caseItem.prompt` as `renderedValue`
+      — not byte-for-byte identical to real promptfoo's own
+      plugin-specific value extraction (this product's local probes
+      don't track a separate "injected value" per plugin), but a safe,
+      always-defined approximation that keeps the judge grounded in
+      real prompt content instead of crashing.
+    - Verified live and extensively against the real Groq-backed E2E
+      reference target, entirely through the actual REST API:
+      (1) ran red-team with the target's existing default plugins
+      (`system-prompt-override` — no real grader exists, correctly
+      still uses the heuristic; `indirect-prompt-injection` — DOES
+      have a real grader) and confirmed one row's assessment read
+      `grader: "promptfoo-library"` with a genuine judge-model reason
+      ("Model refused the request"), while a sibling row on the same
+      plugin correctly fell back to the heuristic when the grading
+      provider call itself failed (a separate, pre-existing flakiness
+      in provider reuse, not a new regression — the fallback handled
+      it exactly as designed, run still completed cleanly, 4/5 pass);
+      (2) temporarily reconfigured the target's plugins to
+      `excessive-agency` and `hallucination` — two plugins that
+      previously ALWAYS fell into the generic heuristic bucket with
+      zero plugin-specific grading — and confirmed both now correctly
+      show `grader: "promptfoo-library"` with real judge reasoning,
+      proving the improvement extends well beyond the small set of
+      already-special-cased plugins. Restored the target's original
+      red-team plugins/strategies/numTests config exactly afterward.
+      No frontend changes this iteration; `node -c` syntax-checked
+      cleanly.
