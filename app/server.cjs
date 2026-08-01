@@ -2221,10 +2221,35 @@ async function optimizeEvalPromptForTarget(target, options = {}) {
   };
 }
 
+// Real promptfoo templates an assertion's `value` against the test's vars before grading
+// (assertions/index.ts: `nunjucks.renderString(renderedValue, resolvedVars)`), so a
+// scenario/parameterized test can write e.g. {"type": "equals", "value": "{{expected}}"}
+// instead of hardcoding a literal per case. This thin wrapper renders `value` once for the
+// row's displayed assertion (so results show what was ACTUALLY compared, not the raw
+// template — otherwise every row would misleadingly show "{{expected}}" regardless of which
+// test it belonged to) and delegates the real grading to evaluateAssertionCore, which renders
+// its own copy internally for the comparison itself. Only plain string values are rendered —
+// arrays/objects (contains-json schemas, etc.) are left untouched, matching real promptfoo's
+// own care not to mangle structured values. Safe for regex patterns too: nunjucks only
+// activates on double-brace/percent syntax (`{{`/`{%`), never a bare `{` like a `{2,4}` quantifier.
 async function evaluateAssertion(output, assertion = {}, context = {}) {
+  const result = await evaluateAssertionCore(output, assertion, context);
+  if (typeof assertion.value === 'string' && context.vars) {
+    const rendered = applyTemplate(assertion.value, context.vars);
+    if (rendered !== assertion.value) {
+      return { ...result, value: rendered };
+    }
+  }
+  return result;
+}
+
+async function evaluateAssertionCore(output, assertion = {}, context = {}) {
   const actual = String(output || '');
-  const expected = String(assertion.value || '');
   const assertionType = String(assertion.type || 'contains');
+  if (typeof assertion.value === 'string' && context.vars) {
+    assertion = { ...assertion, value: applyTemplate(assertion.value, context.vars) };
+  }
+  const expected = String(assertion.value || '');
   if (assertionType.startsWith('not-') && assertionType !== 'not-contains' && assertionType !== 'not-equals') {
     const result = await evaluateAssertion(output, { ...assertion, type: assertionType.slice('not-'.length) }, context);
     return { ...result, pass: !result.pass, score: result.pass ? 0 : 1, inverted: assertionType };

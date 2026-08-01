@@ -2785,3 +2785,51 @@ this loop, not an unlimited test double.
       echoing it back and passing. Restored the target's config
       afterward and confirmed a clean regression run on the plain
       `{{prompt}}` case, unaffected.
+
+## Change log — iteration 55 (template assertion `value` fields too — companion to iteration 54)
+
+73. Direct follow-on from shipping real Nunjucks rendering: real
+    promptfoo also templates an assertion's `value` field against the
+    test's vars before grading (`assertions/index.ts:
+    nunjucks.renderString(renderedValue, resolvedVars)`), so a
+    parameterized/scenario-style test can write
+    `{"type": "equals", "value": "{{expected}}"}` once instead of
+    hardcoding a literal `value` per test case. This product's
+    `evaluateAssertion` used `assertion.value` completely raw — that
+    exact pattern would have compared the model's real output against
+    the literal 12-character string `"{{expected_word}}"`, always
+    failing regardless of what the model actually said.
+    - Renders `assertion.value` (when it's a plain string) through the
+      same `applyTemplate()` Nunjucks renderer from iteration 54,
+      using `context.vars`, before it's used for comparison. Arrays and
+      objects (e.g. `contains-json` schemas) are left untouched, same
+      care real promptfoo takes. Safe for `regex` assertion patterns
+      too — nunjucks only activates on `{{`/`{%`, never a bare `{`
+      like a regex `{2,4}` quantifier.
+    - Recursive call sites (`not-*` inversion, `assert-set` sub-
+      assertions) already pass `context` through unchanged, so nested
+      assertions get their own values rendered automatically with no
+      extra wiring.
+    - **Caught and fixed a related display bug while verifying, not
+      just the grading logic**: the first pass correctly graded using
+      the rendered value internally, but the row's displayed
+      `assertions[].value` field still showed the raw unrendered
+      template — every row would misleadingly display literal
+      `"{{expected_word}}"` regardless of which test case it belonged
+      to, undermining trust in the results table even though grading
+      itself was correct. Fixed by splitting `evaluateAssertion` into
+      a thin public wrapper (renders `value` once more for display,
+      merges it into the returned result — only when it actually
+      changed something) delegating to the original logic, now named
+      `evaluateAssertionCore`.
+    - Verified live and unambiguously: two real test cases against the
+      E2E Groq target, each with `{"type": "contains", "value":
+      "{{expected_word}}"}` but a DIFFERENT `expected_word` var per
+      case ("FOO" vs "BAR", with the model asked to reply with the
+      matching word) — first confirmed both passed (proving the
+      literal template string was never what got compared — it can't
+      match two different words), then, after the display fix, reran
+      and confirmed the row's shown assertion value read "FOO" and
+      "BAR" respectively, exactly matching each case's real rendered
+      value. Restored the target's config and confirmed a clean
+      regression run on the plain baseline case afterward.
