@@ -22,6 +22,7 @@ const {
   REDTEAM_PLUGINS,
   REDTEAM_STRATEGIES,
   AUDIT_SCANNERS,
+  AUDIT_BASELINE_CHECKS,
 } = require('./shared/workflow-catalog.cjs');
 
 const app = express();
@@ -4942,6 +4943,7 @@ app.get('/api/workflow-catalog', requireAuth, (_req, res) => {
     redteamPlugins: REDTEAM_PLUGINS,
     redteamStrategies: REDTEAM_STRATEGIES,
     auditScanners: AUDIT_SCANNERS,
+    auditBaselineChecks: AUDIT_BASELINE_CHECKS,
   });
 });
 

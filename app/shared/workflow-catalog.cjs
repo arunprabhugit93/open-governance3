@@ -253,10 +253,9 @@ const REDTEAM_STRATEGIES = [
   { key: 'encoded', label: 'Encoded attack (legacy)' },
 ];
 
+// Genuinely optional — gated on `audit.scanners` in executeModelAuditRun, so selecting or
+// deselecting one of these actually changes what runs.
 const AUDIT_SCANNERS = [
-  { key: 'metadata-completeness', label: 'Metadata completeness' },
-  { key: 'license', label: 'License policy' },
-  { key: 'provenance', label: 'Model provenance' },
   { key: 'secrets', label: 'Secret exposure' },
   { key: 'malware', label: 'Malware indicators' },
   { key: 'unsafe-code', label: 'Unsafe code' },
@@ -266,9 +265,25 @@ const AUDIT_SCANNERS = [
   { key: 'data-lineage', label: 'Data lineage' },
 ];
 
+// Always run on every model-audit stage regardless of the `scanners` selection — kept out of
+// AUDIT_SCANNERS above so the "select checks to include" picker doesn't misleadingly imply
+// these can be turned off. Exposed separately so the UI can show them as informational
+// ("always included"), not as checkboxes whose state has no actual effect. Previously
+// `metadata-completeness`/`license`/`provenance` were listed in AUDIT_SCANNERS as if optional
+// while always running, and `runtime-boundary`/`data-classification` always ran but weren't
+// listed anywhere at all — both silently misrepresented what the scanner picker controlled.
+const AUDIT_BASELINE_CHECKS = [
+  { key: 'metadata-completeness', label: 'Metadata completeness' },
+  { key: 'provenance', label: 'Model provenance' },
+  { key: 'license', label: 'License policy' },
+  { key: 'runtime-boundary', label: 'Runtime boundary' },
+  { key: 'data-classification', label: 'Data classification' },
+];
+
 module.exports = {
   ASSERTION_TYPES,
   REDTEAM_PLUGINS,
   REDTEAM_STRATEGIES,
   AUDIT_SCANNERS,
+  AUDIT_BASELINE_CHECKS,
 };

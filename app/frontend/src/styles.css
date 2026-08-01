@@ -1023,6 +1023,13 @@ h3 {
   font-size: 12px;
 }
 
+.option-tile-static {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  background: var(--panel-muted, #f5f6f8);
+  color: var(--muted);
+}
+
 .result-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

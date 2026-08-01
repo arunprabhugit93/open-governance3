@@ -1956,3 +1956,40 @@ this loop, not an unlimited test double.
       this exact scenario is what the reporting audit had caught
       crashing). Restored the target's `engineMode` back to `direct`
       afterward and cleaned up the test run.
+
+## Change log — iteration 38 (model-audit catalog vs. executor mismatch)
+
+56. Second item from the same external audit: the model-audit "Scanners"
+    picker UI ("Select checks to include in the model audit run") was
+    lying about what it controlled. `executeModelAuditRun` always runs 5
+    baseline checks (`metadata-completeness`, `provenance`, `license`,
+    `runtime-boundary`, `data-classification`) completely unconditionally
+    — never gated on `audit.scanners` — but 3 of those 5
+    (`metadata-completeness`/`provenance`/`license`) were listed in the
+    `AUDIT_SCANNERS` catalog the picker renders as if they were optional
+    checkboxes, while the other 2 (`runtime-boundary`/`data-
+    classification`) weren't in the catalog at all — always running,
+    silently, with no way for a user to even discover they exist short of
+    reading a run's results.
+    - Split `AUDIT_SCANNERS` in `workflow-catalog.cjs` into two lists: the
+      7 genuinely-optional scanners stay in `AUDIT_SCANNERS` (actually
+      gated by `selectedScanners.includes(...)` in the executor —
+      verified by re-reading that code, not assumed), and a new
+      `AUDIT_BASELINE_CHECKS` (5 entries) for the always-run ones.
+    - Exposed both via `/api/workflow-catalog` (`auditScanners` +
+      `auditBaselineChecks`).
+    - Frontend: added a "Baseline checks" section above "Scanners" in the
+      Model Audit workspace showing the 5 baseline checks as plain
+      informational tiles (not checkboxes — nothing to toggle, since
+      toggling never did anything), and reworded the Scanners section to
+      "Select *additional* checks" so it stops implying the baseline ones
+      are part of the same opt-in mechanism.
+    - Verified live: confirmed the new catalog split via
+      `/api/workflow-catalog` (7 scanners / 5 baseline checks, no
+      overlap), then reran the E2E reference target's real model-audit
+      config — same 9 checks, same pass/fail pattern as every prior run
+      this session (once a since-cleared scratch fixture directory was
+      recreated — an unrelated environment issue from scratchpad cleanup
+      between session continuations, not a regression from this change;
+      confirmed by checking the fixture path no longer existed on disk
+      before recreating it).

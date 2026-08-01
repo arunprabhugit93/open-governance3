@@ -92,6 +92,7 @@ export interface WorkflowCatalogResponse {
   redteamPlugins: WorkflowCatalogItem[];
   redteamStrategies: WorkflowCatalogItem[];
   auditScanners: WorkflowCatalogItem[];
+  auditBaselineChecks: WorkflowCatalogItem[];
 }
 
 export interface EvalRun {

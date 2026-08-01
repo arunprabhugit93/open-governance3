@@ -277,6 +277,7 @@ const emptyWorkflowCatalog: WorkflowCatalogResponse = {
   redteamPlugins: [],
   redteamStrategies: [],
   auditScanners: [],
+  auditBaselineChecks: [],
 };
 
 function Shell({
@@ -2754,8 +2755,24 @@ function ModelAuditWorkspace({
         <section className="subpanel">
           <div className="subpanel-head">
             <div>
+              <h3>Baseline checks</h3>
+              <p className="muted">Always run on every model audit, regardless of the scanner selection below.</p>
+            </div>
+          </div>
+          <div className="option-grid">
+            {workflowCatalog.auditBaselineChecks.map((check) => (
+              <span className="option-tile option-tile-static" key={check.key}>
+                <strong>{check.label}</strong>
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <section className="subpanel">
+          <div className="subpanel-head">
+            <div>
               <h3>Scanners</h3>
-              <p className="muted">Select checks to include in the model audit run.</p>
+              <p className="muted">Select additional checks to include in the model audit run.</p>
             </div>
             <span className="badge">{scanners.length} selected</span>
           </div>
