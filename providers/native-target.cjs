@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
+const nunjucks = require('nunjucks');
 
 function parseBody(text) {
   try {
@@ -20,13 +21,19 @@ function getByPath(obj, dotPath) {
     .reduce((acc, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), obj);
 }
 
+// Mirrors server.cjs's own real-Nunjucks upgrade for the same GraphQL-variables/WebSocket-
+// message-template substitution — kept as its own copy since this file runs standalone,
+// loaded by the real installed promptfoo CLI via file://, not by server.cjs itself.
+const nunjucksEnv = nunjucks.configure({ autoescape: false, throwOnUndefined: false });
+nunjucksEnv.addFilter('load', (str) => JSON.parse(str));
+
 function deepTemplateSubstitute(value, context) {
   if (typeof value === 'string') {
-    let text = value;
-    for (const [key, val] of Object.entries(context)) {
-      text = text.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), String(val ?? ''));
+    try {
+      return nunjucksEnv.renderString(value, context || {});
+    } catch {
+      return value;
     }
-    return text;
   }
   if (Array.isArray(value)) return value.map((item) => deepTemplateSubstitute(item, context));
   if (value && typeof value === 'object') {

@@ -3116,13 +3116,13 @@ function getByPath(obj, dotPath) {
     .reduce((acc, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), obj);
 }
 
+// Used for GraphQL variables / WebSocket message templates (structured JSON, not the main
+// prompt string) — walks the tree and renders each string leaf through the same real Nunjucks
+// engine as applyTemplate, rather than the ad-hoc exact-key regex this used to do (which, like
+// the old applyTemplate, silently no-op'd on any filter/loop/conditional syntax).
 function deepTemplateSubstitute(value, context) {
   if (typeof value === 'string') {
-    let text = value;
-    for (const [key, val] of Object.entries(context)) {
-      text = text.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), String(val ?? ''));
-    }
-    return text;
+    return applyTemplate(value, context);
   }
   if (Array.isArray(value)) return value.map((item) => deepTemplateSubstitute(item, context));
   if (value && typeof value === 'object') {

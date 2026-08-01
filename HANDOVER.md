@@ -2833,3 +2833,40 @@ this loop, not an unlimited test double.
       "BAR" respectively, exactly matching each case's real rendered
       value. Restored the target's config and confirmed a clean
       regression run on the plain baseline case afterward.
+
+## Change log — iteration 56 (Nunjucks for GraphQL/WebSocket provider templates too)
+
+74. Found while reviewing what else still used the pre-iteration-54
+    templating approach: `deepTemplateSubstitute` — used to render
+    GraphQL provider `variables` and WebSocket `messageTemplate` from
+    `libraryConfig` — had its own, separate, still-regex-based
+    per-key substitution (`text.replace(new RegExp(...))`), never
+    touched by the `applyTemplate()` Nunjucks upgrade since it's a
+    different function for structured JSON templating rather than the
+    main prompt string. Same gap, different code path: any filter,
+    loop, or conditional inside a GraphQL variables template or
+    WebSocket message template silently never rendered.
+    - `deepTemplateSubstitute` now delegates each string leaf to
+      `applyTemplate()` (the real Nunjucks renderer) while keeping its
+      existing tree-walk for arrays/objects — same tiny diff pattern
+      as the assertion-value fix two iterations ago.
+    - Also fixed the duplicate copy in `providers/native-target.cjs`
+      for native-engine-mode parity (this file runs standalone, loaded
+      by the real installed promptfoo CLI via `file://`, so it needs
+      its own `require('nunjucks')` — added the same
+      `autoescape: false, throwOnUndefined: false` configuration and
+      `load` filter as `server.cjs`'s copy).
+    - Verified live via a real HTTP round trip, not a mock: stood up a
+      real local Python HTTP server standing in for a GraphQL
+      endpoint, configured a real GraphQL provider on the E2E target
+      pointing at it with `libraryConfig.variables` containing both a
+      filter (`{{prompt | upper}}`) and a `{% for %}` loop
+      (`{% for x in [1,2,3] %}{{x}}{% endfor %}`), called the real
+      "test provider" endpoint with `prompt: "hello world"`, and
+      confirmed the mock server's own log of what it ACTUALLY RECEIVED
+      over the wire showed `variables: {"greeting": "HELLO
+      WORLD-123"}` — both features correctly rendered before the real
+      network call was made. Also verified the `native-target.cjs`
+      copy in isolation (no live promptfoo CLI invocation available)
+      and got the identical correct result. Restored the target's
+      provider config afterward and confirmed a clean regression run.
