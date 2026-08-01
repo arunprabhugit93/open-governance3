@@ -5612,6 +5612,27 @@ app.get('/api/targets/:id/export', requireAuth, async (req, res) => {
   });
 });
 
+// No DB uniqueness constraint on display_name (a hard constraint could break existing rows,
+// and re-importing the same source config for a different environment is a legitimate use
+// case that shouldn't be blocked outright) — instead auto-disambiguates the same way
+// "Duplicate" already does for its own copies (`${name} (copy)`), so two onboards/imports of
+// the same source never silently produce two identically-named, hard-to-tell-apart targets in
+// the registry (confirmed live in this environment before this fix: two targets both named
+// exactly "Imported target").
+async function uniqueDisplayName(client, baseName) {
+  const trimmedBase = String(baseName || '').trim() || 'Untitled target';
+  const existing = await client.query('select display_name from onboarded_targets where display_name = $1 or display_name ~ $2', [
+    trimmedBase,
+    `^${trimmedBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\([0-9]+\\)$`,
+  ]);
+  if (!existing.rows.length) return trimmedBase;
+  const taken = new Set(existing.rows.map((row) => row.display_name));
+  if (!taken.has(trimmedBase)) return trimmedBase;
+  let n = 2;
+  while (taken.has(`${trimmedBase} (${n})`)) n += 1;
+  return `${trimmedBase} (${n})`;
+}
+
 app.post('/api/targets/import', requireAuth, requireAdmin, async (req, res) => {
   const submittedBody = req.body || {};
   let parsedConfigText = {};
@@ -5670,6 +5691,7 @@ app.post('/api/targets/import', requireAuth, requireAdmin, async (req, res) => {
   try {
     await client.query('begin');
     const id = crypto.randomUUID();
+    const uniqueName = await uniqueDisplayName(client, displayName);
     const inserted = await client.query(
       `insert into onboarded_targets
         (id, display_name, target_type, promptfoo_entity, onboarding_object, owner_name, environment, endpoint_url, model_name, auth_strategy, system_prompt, metadata, status)
@@ -5677,7 +5699,7 @@ app.post('/api/targets/import', requireAuth, requireAdmin, async (req, res) => {
        returning *`,
       [
         id,
-        displayName,
+        uniqueName,
         targetType,
         type.promptfooEntity,
         type.onboardingObject,
@@ -6120,6 +6142,7 @@ app.post('/api/targets', requireAuth, requireAdmin, async (req, res) => {
   try {
     await client.query('begin');
     const id = crypto.randomUUID();
+    const uniqueName = await uniqueDisplayName(client, displayName.trim());
     const submittedMetadata = metadata && typeof metadata === 'object' ? metadata : {};
     const normalizedMetadata = removeRawSecrets(submittedMetadata);
     const rawOnboardingApiKey = String(submittedMetadata.provider?.apiKey || '').trim();
@@ -6131,7 +6154,7 @@ app.post('/api/targets', requireAuth, requireAdmin, async (req, res) => {
        returning *`,
       [
         id,
-        displayName.trim(),
+        uniqueName,
         targetType,
         type.promptfooEntity,
         type.onboardingObject,

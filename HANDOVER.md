@@ -1993,3 +1993,38 @@ this loop, not an unlimited test double.
       between session continuations, not a regression from this change;
       confirmed by checking the fixture path no longer existed on disk
       before recreating it).
+
+## Change log — iteration 39 (duplicate target name prevention)
+
+57. Third item from the same external audit: no uniqueness check on
+    `onboarded_targets.display_name` in either the create or import route
+    — confirmed live in this environment, which already had two separate
+    targets both literally named "Imported target" (the import route's
+    own fallback default when no name is supplied). Two identically-named
+    targets in the registry list are genuinely hard to tell apart.
+    - Added `uniqueDisplayName(client, baseName)` in `server.cjs`: checks
+      for an existing exact match or `"name (N)"` variant and returns the
+      next free `"name (N)"` suffix — the same disambiguation shape
+      "Duplicate" already uses for its own copies (`${name} (copy)`), so
+      this isn't a new UX pattern, just applying the existing one
+      consistently. Deliberately not a hard DB uniqueness constraint —
+      that could break pre-existing duplicate rows and would outright
+      block a legitimate re-import of the same source config for a
+      different environment, where auto-disambiguation is more useful
+      than an error.
+    - Wired into both the create route (`POST /api/targets`) and the
+      import route (`POST /api/targets/import`).
+    - Verified live: created the same target name three times in a row
+      via the create route — got back `"Dedup name test"`, `"Dedup name
+      test (2)"`, `"Dedup name test (3)"` — then did the same via the
+      import route with an identical pasted config and got the correctly
+      continued sequence (confirmed via a full registry listing, since an
+      earlier verification attempt's response got mangled by a local
+      shell/JSON-escaping issue on my end, not a server error — the
+      calls had actually succeeded, and the next real attempt correctly
+      picked up the sequence where the earlier ones left off, which is
+      itself further confirmation the counter logic is correct across
+      independent requests). Deleted all 7 test targets afterward. Left
+      the pre-existing "Imported target" duplicates in the registry
+      untouched — this fix prevents new collisions, it doesn't rewrite a
+      user's existing data.
