@@ -2591,6 +2591,42 @@ async function mapLimit(items, limit, iterator, shouldStop) {
   return results.filter(Boolean);
 }
 
+// Mirrors real promptfoo's `parseChatPrompt` (providers/shared.ts): if the rendered prompt
+// string is itself a JSON array of `{role, content}` chat messages, that array IS the
+// conversation sent to the provider — this is real promptfoo's actual mechanism for scripted
+// multi-turn eval test cases (e.g. a prompt template like
+// `[{"role":"user","content":"Hi"},{"role":"assistant","content":"Hello!"},{"role":"user","content":"{{followup}}"}]`),
+// reusing the existing prompt-template + {{var}} substitution pipeline rather than a new schema.
+// Falls through to a plain single-turn user message when the prompt isn't a valid messages array.
+function parseChatMessagesPrompt(prompt) {
+  const trimmed = String(prompt || '').trim();
+  if (!trimmed.startsWith('[')) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || !parsed.length) return null;
+  const valid = parsed.every(
+    (message) => message && typeof message === 'object' && typeof message.role === 'string' && typeof message.content === 'string',
+  );
+  return valid ? parsed : null;
+}
+
+// For providers whose API accepts `system` as just another message role (OpenAI-compatible,
+// Azure OpenAI) — a separately-configured `systemPrompt` is only prepended when the parsed
+// conversation doesn't already define its own system message, so a fully-scripted conversation
+// isn't silently given two.
+function buildChatMessages(prompt, systemPrompt) {
+  const parsed = parseChatMessagesPrompt(prompt);
+  if (parsed) {
+    const hasSystem = parsed.some((message) => message.role === 'system');
+    return hasSystem || !systemPrompt ? parsed : [{ role: 'system', content: systemPrompt }, ...parsed];
+  }
+  return [...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []), { role: 'user', content: prompt }];
+}
+
 async function callOpenAICompatible({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens, libraryConfig }) {
   if (!baseUrl) {
     throw new Error('Provider base URL is required for direct eval execution');
@@ -2622,10 +2658,7 @@ async function callOpenAICompatible({ baseUrl, model, apiKey, systemPrompt, prom
     },
     body: JSON.stringify({
       model,
-      messages: [
-        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        { role: 'user', content: prompt },
-      ],
+      messages: buildChatMessages(prompt, systemPrompt),
       temperature,
       max_tokens: maxTokens,
       ...(requestLogprobs ? { logprobs: true } : {}),
@@ -2678,10 +2711,7 @@ async function callAzureOpenAI({ baseUrl, model, apiKey, systemPrompt, prompt, t
       'api-key': apiKey || '',
     },
     body: JSON.stringify({
-      messages: [
-        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        { role: 'user', content: prompt },
-      ],
+      messages: buildChatMessages(prompt, systemPrompt),
       temperature,
       max_tokens: maxTokens,
     }),
@@ -2830,6 +2860,15 @@ async function callViaPromptfooLibrary({ providerKey, model, baseUrl, apiKey, li
 async function callAnthropic({ baseUrl, model, apiKey, systemPrompt, prompt, temperature, maxTokens }) {
   if (!baseUrl) throw new Error('Anthropic base URL is required');
   if (!model) throw new Error('Anthropic model is required');
+  // Anthropic's API rejects a `system` role inside `messages` — unlike the OpenAI-shaped
+  // adapters, any system message parsed out of a multi-turn JSON prompt has to be lifted into
+  // the separate top-level `system` field instead (falling back to the provider's own
+  // systemPrompt config when the scripted conversation doesn't define its own).
+  const parsedMessages = parseChatMessagesPrompt(prompt);
+  const rawMessages = parsedMessages || [{ role: 'user', content: prompt }];
+  const systemFromPrompt = rawMessages.find((message) => message.role === 'system')?.content;
+  const messages = rawMessages.filter((message) => message.role !== 'system');
+  const effectiveSystem = systemFromPrompt || systemPrompt;
   const response = await fetch(`${String(baseUrl).replace(/\/$/, '')}/v1/messages`, {
     method: 'POST',
     headers: {
@@ -2841,8 +2880,8 @@ async function callAnthropic({ baseUrl, model, apiKey, systemPrompt, prompt, tem
       model,
       max_tokens: maxTokens,
       temperature,
-      ...(systemPrompt ? { system: systemPrompt } : {}),
-      messages: [{ role: 'user', content: prompt }],
+      ...(effectiveSystem ? { system: effectiveSystem } : {}),
+      messages,
     }),
   });
   const bodyText = await response.text();
