@@ -364,6 +364,23 @@ export function generateEvalAssertions(
   );
 }
 
+export interface PromptOptimizationResult {
+  baseline: { content: string; passRate: number; results: Array<{ name: string; pass: boolean; error: string | null; output: string }> };
+  candidates: Array<{ label: string; content: string; passRate: number; results: Array<{ name: string; pass: boolean; error: string | null; output: string }> }>;
+  best: { label: string; content: string; passRate: number };
+}
+
+export function optimizeEvalPrompt(
+  token: string,
+  id: string,
+  payload: { promptIndex?: number; providerIndex?: number; maxTestCases?: number; numCandidates?: number; instructions?: string },
+): Promise<PromptOptimizationResult> {
+  return request<PromptOptimizationResult>(`/api/targets/${id}/stages/eval/optimize-prompt`, token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listEvalRuns(token: string, id: string): Promise<{ runs: EvalRun[] }> {
   return request<{ runs: EvalRun[] }>(`/api/targets/${id}/stages/eval/runs`, token);
 }

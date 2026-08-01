@@ -2049,6 +2049,134 @@ async function generateEvalAssertionsForTarget(target, options = {}) {
   }));
 }
 
+function promptOptimizationPrompt(currentPrompt, passRatePercent, failingCases, numCandidates, instructions) {
+  const failingBlock = failingCases.length
+    ? `\n\nHere are some cases it's currently failing:\n${failingCases
+        .map((testCase) => `- ${testCase.name}: ${testCase.error ? `errored with "${testCase.error}"` : `produced "${testCase.output}"`}`)
+        .join('\n')}`
+    : '';
+  return `You are improving a prompt template for an LLM application. The template may contain {{variables}} in double curly braces — every variable in the original MUST be preserved exactly (same names, same syntax) in each rewrite.\n\nCurrent template:\n<Prompt>\n${currentPrompt}\n</Prompt>\n\nIt currently passes ${passRatePercent}% of its test cases.${failingBlock}\n\nPropose ${numCandidates} distinct improved rewrites of the template — clearer instructions, better constraints, or structure that would fix the failures above — while keeping the same {{variables}} and the same core task.${instructions ? `\n${instructions}` : ''}\n\nRespond ONLY as JSON: {"candidates": [{"label": "short description of the change, max 10 words", "content": "the full rewritten prompt template"}]}`;
+}
+
+// Mirrors the core idea of real promptfoo's `optimize` command (src/optimizer/promptOptimizer.ts)
+// without its train/validation-split refinement: run the current prompt against real test cases
+// for a baseline pass rate, ask an LLM to propose rewrites informed by the actual failures, then
+// ACTUALLY run each candidate against the real target provider and the same test cases (not just
+// asking an LLM which one "sounds better") so the ranking reflects real behavior, not a guess.
+async function optimizeEvalPromptForTarget(target, options = {}) {
+  const evalConfig = target.metadata?.eval || {};
+  const prompts = asArray(evalConfig.prompts);
+  const promptIndex = Math.max(0, Math.min(prompts.length - 1, Number(options.promptIndex) || 0));
+  const promptEntry = prompts[promptIndex];
+  if (!promptEntry) {
+    throw new Error('Add at least one prompt to this eval before optimizing it.');
+  }
+  const targetProvider = asArray(evalConfig.providers)[Math.max(0, Number(options.providerIndex) || 0)];
+  if (!targetProvider?.baseUrl || !targetProvider?.model) {
+    throw new Error('Configure a real eval provider with a model before optimizing a prompt.');
+  }
+  const maxTestCases = Math.max(1, Math.min(8, Number(options.maxTestCases) || 5));
+  const testCases = asArray(evalConfig.testCases).slice(0, maxTestCases);
+  if (!testCases.length) {
+    throw new Error('Add at least one test case before optimizing a prompt.');
+  }
+  const injectVar = evalConfig.injectVar || 'prompt';
+  const targetAdapter = targetProvider.engine || adapterForProvider(targetProvider.providerKey);
+  const targetApiKey = await resolveProviderApiKey(target.id, targetProvider);
+
+  async function runPromptAgainstTestCases(promptTemplate) {
+    const results = [];
+    for (const testCase of testCases) {
+      const vars = testCase.vars && Object.keys(testCase.vars).length ? testCase.vars : { [injectVar]: testCase.input };
+      const rendered = applyTemplate(promptTemplate, vars);
+      let output = '';
+      let error = null;
+      try {
+        const called = await callProviderAdapter(targetAdapter, {
+          baseUrl: targetProvider.baseUrl,
+          model: targetProvider.model,
+          apiKey: targetApiKey,
+          systemPrompt: targetProvider.systemPrompt,
+          prompt: rendered,
+          temperature: Number(targetProvider.temperature ?? 0),
+          maxTokens: Number(targetProvider.maxTokens ?? 512),
+          providerKey: targetProvider.providerKey,
+        });
+        output = called.output;
+      } catch (err) {
+        error = err.message;
+      }
+      const assertions = asArray(testCase.assertions).length ? testCase.assertions : [{ type: testCase.assertion || 'contains', value: testCase.expected || '' }];
+      let pass = false;
+      if (!error) {
+        const graded = await Promise.all(assertions.map((assertion) => evaluateAssertion(output, assertion, { target, prompt: rendered, vars })));
+        pass = graded.every((grade) => grade.pass);
+      }
+      results.push({ name: testCase.name, pass, error, output: String(output || '').slice(0, 300) });
+    }
+    const passCount = results.filter((result) => result.pass).length;
+    return { results, passRate: results.length ? passCount / results.length : 0 };
+  }
+
+  const baseline = await runPromptAgainstTestCases(promptEntry.content);
+
+  let generationProvider = judgeConfigForTarget(target);
+  if (!generationProvider) {
+    generationProvider = {
+      providerKey: targetProvider.providerKey,
+      adapter: targetAdapter,
+      baseUrl: targetProvider.baseUrl,
+      model: targetProvider.model,
+      apiKeySecretId: targetProvider.apiKeySecretId,
+      temperature: 0.8,
+      maxTokens: 1024,
+      systemPrompt: 'You are a helpful assistant that rewrites prompts in strict JSON format, with no markdown fencing or commentary.',
+    };
+  }
+  const generationApiKey = await resolveProviderApiKey(target.id, generationProvider);
+  const numCandidates = Math.max(1, Math.min(5, Number(options.numCandidates) || 3));
+  const instructions = String(options.instructions || '').trim();
+  const failingCases = baseline.results.filter((result) => !result.pass).slice(0, 5);
+
+  const proposalResult = await callProviderAdapter(generationProvider.adapter, {
+    ...generationProvider,
+    apiKey: generationApiKey,
+    prompt: promptOptimizationPrompt(promptEntry.content, Math.round(baseline.passRate * 100), failingCases, numCandidates, instructions),
+  });
+  let candidates;
+  try {
+    const parsed = parseJsonCandidate(proposalResult.output);
+    candidates = Array.isArray(parsed.candidates) ? parsed.candidates.filter((candidate) => candidate && candidate.content).slice(0, numCandidates) : [];
+  } catch (error) {
+    throw new Error(`Generation provider did not return valid JSON for prompt candidates: ${error.message}`);
+  }
+  if (!candidates.length) {
+    throw new Error('Generation provider did not return any prompt candidates.');
+  }
+
+  const scored = [];
+  for (const candidate of candidates) {
+    const run = await runPromptAgainstTestCases(candidate.content);
+    scored.push({
+      label: candidate.label ? String(candidate.label).slice(0, 80) : 'Candidate',
+      content: candidate.content,
+      passRate: run.passRate,
+      results: run.results,
+    });
+  }
+
+  const best = scored.reduce(
+    (acc, candidate) => (candidate.passRate > acc.passRate ? candidate : acc),
+    { label: 'Baseline (unchanged)', content: promptEntry.content, passRate: baseline.passRate },
+  );
+
+  return {
+    baseline: { content: promptEntry.content, passRate: baseline.passRate, results: baseline.results },
+    candidates: scored,
+    best,
+  };
+}
+
 async function evaluateAssertion(output, assertion = {}, context = {}) {
   const actual = String(output || '');
   const expected = String(assertion.value || '');
@@ -5604,6 +5732,23 @@ app.post('/api/targets/:id/stages/eval/generate-assertions', requireAuth, requir
   try {
     const assertions = await generateEvalAssertionsForTarget(payload.target, req.body || {});
     res.json({ assertions });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Preview-only, same pattern as generate-dataset/generate-assertions — makes REAL provider
+// calls (baseline + each candidate against the real target provider and real test cases), so
+// this is slower than the other two by design; the caller applies the winning prompt content
+// via the normal eval-config PATCH route once they've reviewed the comparison.
+app.post('/api/targets/:id/stages/eval/optimize-prompt', requireAuth, requireAdmin, async (req, res) => {
+  const payload = await fetchTarget(req.params.id);
+  if (!payload) {
+    return res.status(404).json({ error: 'Target not found' });
+  }
+  try {
+    const result = await optimizeEvalPromptForTarget(payload.target, req.body || {});
+    res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

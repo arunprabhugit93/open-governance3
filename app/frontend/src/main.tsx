@@ -24,6 +24,7 @@ import {
   importEvalStageConfig,
   generateEvalDataset,
   generateEvalAssertions,
+  optimizeEvalPrompt,
   importTarget,
   login,
   logout,
@@ -57,6 +58,7 @@ import {
   type TargetPayload,
   type AppUser,
   type ApiToken,
+  type PromptOptimizationResult,
 } from './api';
 import type {
   CatalogResponse,
@@ -1005,6 +1007,13 @@ function EvalWorkspace({
     timeoutMs: Number(evalConfig.runOptions?.timeoutMs || 30000),
   });
   const [bulkText, setBulkText] = useState('');
+  const [optimizePromptIndex, setOptimizePromptIndex] = useState(0);
+  const [optimizeNumCandidates, setOptimizeNumCandidates] = useState(3);
+  const [optimizeMaxTestCases, setOptimizeMaxTestCases] = useState(5);
+  const [optimizeInstructions, setOptimizeInstructions] = useState('');
+  const [optimizeResult, setOptimizeResult] = useState<PromptOptimizationResult | null>(null);
+  const [optimizeBusy, setOptimizeBusy] = useState(false);
+  const [optimizeError, setOptimizeError] = useState('');
   const [generateNumPersonas, setGenerateNumPersonas] = useState(3);
   const [generateNumPerPersona, setGenerateNumPerPersona] = useState(2);
   const [generateInstructions, setGenerateInstructions] = useState('');
@@ -1218,6 +1227,32 @@ function EvalWorkspace({
       );
       setMessage('Imported CSV test cases.');
     }
+  }
+
+  async function handleOptimizePrompt() {
+    if (isViewer) return;
+    setOptimizeError('');
+    setOptimizeBusy(true);
+    setOptimizeResult(null);
+    try {
+      const result = await optimizeEvalPrompt(token, detail.target.id, {
+        promptIndex: optimizePromptIndex,
+        numCandidates: optimizeNumCandidates,
+        maxTestCases: optimizeMaxTestCases,
+        instructions: optimizeInstructions.trim() || undefined,
+      });
+      setOptimizeResult(result);
+    } catch (err) {
+      setOptimizeError(err instanceof Error ? err.message : 'Unable to optimize prompt');
+    } finally {
+      setOptimizeBusy(false);
+    }
+  }
+
+  function applyOptimizedPrompt(content: string) {
+    updatePrompt(optimizePromptIndex, { content });
+    setOptimizeResult(null);
+    setMessage('Applied the winning prompt — remember to save.');
   }
 
   async function handleGenerateDataset() {
@@ -1670,6 +1705,82 @@ function EvalWorkspace({
               <textarea value={prompt.content} onChange={(event) => updatePrompt(index, { content: event.target.value })} />
             </div>
           ))}
+        </section>
+
+        <section className="subpanel">
+          <div className="subpanel-head">
+            <div>
+              <h3>Optimize prompt</h3>
+              <p className="muted">
+                Runs the prompt against your existing test cases for a baseline score, asks an LLM for improved rewrites informed by the
+                failures, then actually runs each rewrite against the real provider to see which one really scores best.
+              </p>
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="field">
+              <label>Prompt to optimize</label>
+              <select value={optimizePromptIndex} onChange={(event) => setOptimizePromptIndex(Number(event.target.value))}>
+                {prompts.map((prompt, index) => (
+                  <option value={index} key={`${prompt.name}-${index}`}>
+                    {prompt.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Candidates</label>
+              <input type="number" min={1} max={5} value={optimizeNumCandidates} onChange={(event) => setOptimizeNumCandidates(Number(event.target.value))} />
+            </div>
+            <div className="field">
+              <label>Test cases to score against</label>
+              <input type="number" min={1} max={8} value={optimizeMaxTestCases} onChange={(event) => setOptimizeMaxTestCases(Number(event.target.value))} />
+            </div>
+            <div className="field span-2">
+              <label>Additional instructions (optional)</label>
+              <input value={optimizeInstructions} onChange={(event) => setOptimizeInstructions(event.target.value)} placeholder="e.g. keep the tone formal" />
+            </div>
+          </div>
+          <button className="secondary-button" type="button" disabled={isViewer || optimizeBusy} title={viewerTitle} onClick={handleOptimizePrompt}>
+            {optimizeBusy ? 'Optimizing... (this makes real calls, may take a bit)' : 'Run optimization'}
+          </button>
+          {optimizeError ? <p className="error">{optimizeError}</p> : null}
+          {optimizeResult ? (
+            <div className="generated-preview">
+              <p className="muted">
+                Baseline: {Math.round(optimizeResult.baseline.passRate * 100)}% pass rate. Best: {optimizeResult.best.label} at{' '}
+                {Math.round(optimizeResult.best.passRate * 100)}%.
+              </p>
+              <div className="prompt-row">
+                <strong>Baseline (unchanged)</strong>
+                <p className="muted">{Math.round(optimizeResult.baseline.passRate * 100)}% pass rate</p>
+                <textarea value={optimizeResult.baseline.content} readOnly />
+              </div>
+              {optimizeResult.candidates.map((candidate, index) => (
+                <div className="prompt-row" key={`${candidate.label}-${index}`}>
+                  <strong>
+                    {candidate.label} — {Math.round(candidate.passRate * 100)}% pass rate
+                    {candidate.content === optimizeResult.best.content ? ' (best)' : ''}
+                  </strong>
+                  <textarea value={candidate.content} readOnly />
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={isViewer}
+                    title={viewerTitle}
+                    onClick={() => applyOptimizedPrompt(candidate.content)}
+                  >
+                    Apply this rewrite
+                  </button>
+                </div>
+              ))}
+              <div className="stage-actions">
+                <button className="ghost-button" type="button" onClick={() => setOptimizeResult(null)}>
+                  Discard
+                </button>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="subpanel">

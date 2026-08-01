@@ -2420,3 +2420,50 @@ this loop, not an unlimited test double.
       execution wiring picks up AI-generated assertions the same as
       manually-authored ones. Restored `defaultTest.assert` to `[]`
       afterward.
+
+## Change log — iteration 47 (AI-assisted prompt optimization)
+
+65. Third and last of real promptfoo's generation/optimization commands
+    covered this run: `optimize` (`src/optimizer/promptOptimizer.ts`,
+    ~950 lines) proposes improved prompt rewrites and scores them
+    against real test cases to find the best-performing variant, with
+    an optional train/validation split. Implemented the core idea —
+    NOT the validation-split refinement, which real promptfoo itself
+    treats as optional/skippable — bounded so a single request stays
+    reasonably fast: run the current prompt against up to 8 existing
+    test cases for a baseline pass rate, ask an LLM for up to 5 rewrites
+    informed by which cases are actually failing and why, then actually
+    run each candidate against the real target provider and the same
+    test cases (not just ask an LLM which one "sounds better" — the
+    ranking has to reflect real behavior, since a rewrite can plausibly
+    read as an improvement and still make the model perform worse).
+    - Backend: `optimizeEvalPromptForTarget()` in `server.cjs`, reusing
+      `applyTemplate` for {{variable}} substitution, `callProviderAdapter`
+      for both the real target calls and the LLM-generation call,
+      `evaluateAssertion` for grading, and the same judge/eval-provider
+      fallback chain as the two generation features. New preview-only
+      route `POST /api/targets/:id/stages/eval/optimize-prompt`.
+    - Frontend: new "Optimize prompt" section in the Eval workspace
+      (which prompt, candidate count, test-case count, optional
+      instructions), showing baseline vs. each candidate's real pass
+      rate with an "Apply this rewrite" button per candidate that
+      replaces that prompt's content in the local editor (not
+      auto-saved — same preview-then-apply pattern as the other two
+      generation features).
+    - Verified live and rigorously: (1) called the route directly
+      against the real E2E target with 2 test cases — the baseline
+      scored 100%, one real candidate rewrite actually REGRESSED to 0%
+      (the model literally answered "GO." instead of "READY" — a
+      genuine behavioral difference caught by actually running it, not
+      a hypothetical), another tied at 100%, and the ranking logic
+      correctly kept "Baseline (unchanged)" since nothing strictly beat
+      it; (2) drove the real browser UI — logged in, opened the real
+      Eval workspace, a real click on "Run optimization" (3 real
+      candidates generated and scored against real API calls), a real
+      click on "Apply this rewrite" correctly replaced the prompt
+      textarea's content and cleared the preview; (3) confirmed via a
+      fresh GET that the target's actually-stored config was untouched
+      throughout (prompt still just `{{prompt}}`) since "Save config"
+      was never clicked — no restore needed.
+    - This closes all three of real promptfoo's `generate dataset` /
+      `generate assertions` / `optimize` commands for this product.
