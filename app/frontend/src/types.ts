@@ -103,6 +103,11 @@ export interface EvalRun {
   runOptions: Record<string, unknown>;
   configSnapshot: Record<string, unknown>;
   results: {
+    // Red-team runs only: set when "Use real adversarial generation" was on but real
+    // generation actually fell back to local templates, and why (no eval provider/API key,
+    // real generation returned zero cases, or a real generation error) - so the UI can tell
+    // the user real generation didn't happen instead of silently substituting local probes.
+    realGenerationFallbackReason?: string | null;
     summary?: {
       providers: number;
       prompts: number;
@@ -190,6 +195,7 @@ export interface RedTeamPlan {
   target: OnboardedTarget;
   readiness: StageReadiness;
   generatedAt: string;
+  realGenerationFallbackReason?: string | null;
   summary: {
     total: number;
     generated: number;

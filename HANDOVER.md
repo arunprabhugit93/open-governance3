@@ -2028,3 +2028,84 @@ this loop, not an unlimited test double.
       the pre-existing "Imported target" duplicates in the registry
       untouched — this fix prevents new collisions, it doesn't rewrite a
       user's existing data.
+
+## Change log — iteration 40 (surface real-generation fallback + a second real bug found while verifying it)
+
+58. Fourth item from the same external audit: `generateRealRedTeamCases`
+    silently returned `null` on every failure path (no provider, no
+    resolvable API key, zero tests generated, or a real generation
+    error), only logging server-side via `console.error` — the caller
+    then transparently substituted local-template generation with no
+    signal in the API response the UI could use to tell the user real
+    generation didn't actually happen.
+    - Changed `generateRealRedTeamCases` to return `{ cases, error }`
+      instead of a bare `cases | null`, with a specific, actionable
+      `error` string for each failure mode — including a dedicated
+      message when `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION` (set in
+      this project's own `.env`) is the likely cause of a 0-test result,
+      since that's a real, common cause here, not a hypothetical one.
+    - `buildRedTeamCases` now threads the reason through as
+      `rows.realGenerationFallbackReason` (an extra own-property on the
+      returned array — doesn't affect `.filter`/`.map`/`.length` at
+      either of its two call sites, so no signature change needed there).
+      Both the `/plan` preview route and `executeRedTeamRun`'s actual run
+      result now include `realGenerationFallbackReason` at the top level
+      (persists through the existing generic `results` JSON column with
+      zero new plumbing).
+    - Frontend: added a warning banner (reusing the existing `.error`
+      style) above both the "Attack plan" preview and the "Latest run"
+      summary in the Red-team workspace, shown only when the reason is
+      non-null.
+    - Also fixed a related, smaller bug spotted in the same code while
+      there: the run summary's `generated` count only matched
+      `item.source === 'generated'` (the local generator's source tag),
+      silently excluding the real generator's `'generated-live'` tag —
+      meaning a fully successful real-generation run reported 0
+      "generated" cases in its own summary. Now matches either.
+    - **Found a second, more significant real bug while live-verifying
+      this fix**: the `PATCH .../stages/red_team/config` route never
+      persisted `useRealGeneration` *at all* — not a wrong default, a
+      complete omission from the field list. The frontend's "Use real
+      adversarial generation" checkbox has been sending this field
+      correctly this entire time; the backend simply dropped it on every
+      save. `buildRedTeamCases` reads `redteam.useRealGeneration` to
+      decide whether to attempt real generation at all — with it never
+      persisting, **real generation could never actually be turned on
+      through the UI/API**, silently defaulting to local templates on
+      every run regardless of what the user configured. Discovered this
+      because my first three attempts to verify the new
+      `realGenerationFallbackReason` field all showed successful local-
+      looking results no matter which plugin I selected — including ones
+      confirmed to be in promptfoo's own `REMOTE_ONLY_PLUGIN_IDS` list,
+      which should have failed under this project's
+      `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true` — until
+      checking the live stored config showed `useRealGeneration` had
+      silently stayed unset through every one of my PATCH attempts.
+      Fixed with the same non-destructive `!== undefined` pattern already
+      used for every other field on this route.
+    - Verified live, the full matrix, against the real E2E reference
+      target (both eval and red-team config captured before, restored
+      after): (1) with a corrupted `apiKeySecretId`, real generation
+      correctly failed with `"No resolvable API key for the generation
+      provider (...)"`; (2) with the real key restored and
+      `system-prompt-override` selected (a plugin actually listed in
+      promptfoo's own `REMOTE_ONLY_PLUGIN_IDS`), real generation
+      correctly returned 0 tests and surfaced exactly the
+      `PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION`-aware message, with
+      the resulting probe's `source` correctly showing `generated` (the
+      local fallback), not `generated-live`; (3) confirmed a genuinely
+      successful real generation (before the persistence bug was found)
+      correctly reports `realGenerationFallbackReason: null`. Fully
+      restored the target's original eval and red-team config
+      (`useRealGeneration` explicitly reset to `false`, matching its
+      true pre-testing state — the original captured snapshot predated
+      this bug's discovery, so it never had the field at all, and the
+      route's own non-destructive-PATCH design correctly preserved
+      whatever value was live rather than clearing it, meaning restoring
+      from that snapshot alone would NOT have reset the field — this
+      needed an explicit correction). Reran both the eval and red-team
+      stages afterward to confirm zero regression (same pass rates as
+      every prior run this session). Task #40 (filtering/disabling
+      remote-only plugins/strategies in the UI itself, so a user
+      wouldn't need to hit this failure message to find out) remains
+      open as a follow-up.

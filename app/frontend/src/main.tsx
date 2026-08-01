@@ -2540,6 +2540,12 @@ function RedTeamWorkspace({
           <h3>Attack plan</h3>
           {plan ? (
             <>
+              {plan.realGenerationFallbackReason ? (
+                <div className="error">
+                  <strong>Real generation didn't run — used local templates instead.</strong>
+                  <p>{plan.realGenerationFallbackReason}</p>
+                </div>
+              ) : null}
               <div className="run-summary">
                 <div><span>Total</span><strong>{plan.summary.total}</strong></div>
                 <div><span>Generated</span><strong>{plan.summary.generated}</strong></div>
@@ -2567,6 +2573,12 @@ function RedTeamWorkspace({
 
         <section className="subpanel">
           <h3>Latest run</h3>
+          {latestRun?.results?.realGenerationFallbackReason ? (
+            <div className="error">
+              <strong>Real generation didn't run — used local templates instead.</strong>
+              <p>{latestRun.results.realGenerationFallbackReason}</p>
+            </div>
+          ) : null}
           {latestRun?.results?.summary ? (
             <div className="run-summary">
               <div><span>Total</span><strong>{latestRun.results.summary.total}</strong></div>

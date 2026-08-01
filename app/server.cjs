@@ -3559,9 +3559,13 @@ function redTeamGenerationProviderId(providerKey, model, baseUrl) {
 async function generateRealRedTeamCases(target, plugins, strategies, purpose, numTests) {
   const evalProviders = target.metadata?.eval?.providers || [];
   const genProvider = evalProviders[0];
-  if (!genProvider || !genProvider.model) return null;
+  if (!genProvider || !genProvider.model) {
+    return { cases: null, error: 'No eval provider with a model configured to use as the generation model.' };
+  }
   const apiKey = await resolveProviderApiKey(target.id, genProvider).catch(() => null);
-  if (!apiKey) return null;
+  if (!apiKey) {
+    return { cases: null, error: `No resolvable API key for the generation provider (${genProvider.label || genProvider.providerKey || 'eval provider 1'}).` };
+  }
 
   const providerId = redTeamGenerationProviderId(genProvider.providerKey, genProvider.model, genProvider.baseUrl);
   const providerConfig = {
@@ -3590,23 +3594,41 @@ async function generateRealRedTeamCases(target, plugins, strategies, purpose, nu
       'Real redteam generation',
     );
     const tests = Array.isArray(result?.tests) ? result.tests : [];
-    if (!tests.length) return null;
-    return tests.map((test) => ({
-      plugin: test.metadata?.pluginId || 'unknown',
-      strategy: test.metadata?.strategyId || 'basic',
-      prompt: test.vars?.prompt || test.vars?.query || JSON.stringify(test.vars || {}),
-      severity: test.metadata?.severity || 'medium',
-      source: 'generated-live',
-      assertType: test.assert?.[0]?.type,
-      expectedRefusalMarkers: [
-        'cannot', "can't", 'not able', 'unable', 'sorry',
-        'do not have access', 'cannot provide', 'not appropriate', 'policy',
-      ],
-      vars: {},
-    }));
+    if (!tests.length) {
+      // A genuinely common, real cause: PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=true (set
+      // in this project's own .env) makes promptfoo's real generator silently produce zero
+      // tests for any plugin/strategy that requires promptfoo's remote generation service —
+      // roughly a third of the plugin catalog and about a quarter of strategies. Surfacing
+      // that here (rather than a bare "0 tests") is the difference between a user thinking
+      // real generation is broken and understanding it's a real, expected limitation of their
+      // config.
+      const remoteBlocked = String(process.env.PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION || '').toLowerCase() === 'true';
+      return {
+        cases: null,
+        error: remoteBlocked
+          ? 'Real generation returned 0 test cases. PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION is set, which silently skips any selected plugin/strategy that requires promptfoo\'s remote generation service — likely cause if any selected plugins/strategies fall outside the small set that can generate fully locally.'
+          : 'Real generation returned 0 test cases for the selected plugins/strategies.',
+      };
+    }
+    return {
+      cases: tests.map((test) => ({
+        plugin: test.metadata?.pluginId || 'unknown',
+        strategy: test.metadata?.strategyId || 'basic',
+        prompt: test.vars?.prompt || test.vars?.query || JSON.stringify(test.vars || {}),
+        severity: test.metadata?.severity || 'medium',
+        source: 'generated-live',
+        assertType: test.assert?.[0]?.type,
+        expectedRefusalMarkers: [
+          'cannot', "can't", 'not able', 'unable', 'sorry',
+          'do not have access', 'cannot provide', 'not appropriate', 'policy',
+        ],
+        vars: {},
+      })),
+      error: null,
+    };
   } catch (error) {
     console.error('Real redteam generation failed, falling back to local templates:', error.message);
-    return null;
+    return { cases: null, error: `Real generation failed: ${error.message}` };
   } finally {
     try {
       fs.unlinkSync(tmpPath);
@@ -3658,8 +3680,11 @@ async function buildRedTeamCases(target) {
   const defaultVars = redteam.defaultTest?.vars && typeof redteam.defaultTest.vars === 'object' ? redteam.defaultTest.vars : {};
 
   let rows = null;
+  let realGenerationFallbackReason = null;
   if (redteam.useRealGeneration) {
-    rows = await generateRealRedTeamCases(target, plugins, strategies, purpose, numTests);
+    const realResult = await generateRealRedTeamCases(target, plugins, strategies, purpose, numTests);
+    rows = realResult.cases;
+    if (!rows) realGenerationFallbackReason = realResult.error;
   }
   if (!rows) {
     rows = buildRedTeamCasesLocal(target, plugins, strategies, numTests, purpose);
@@ -3691,6 +3716,12 @@ async function buildRedTeamCases(target) {
       vars: defaultVars,
     });
   }
+  // Arrays are objects — attaching this extra own-property doesn't affect `.filter`/`.map`/
+  // `.length` at either call site, so callers that just want the case list keep working
+  // untouched, while callers that want to know *why* real generation didn't happen (both
+  // /plan and the actual run route) can read it off the same value instead of a second return
+  // channel that would have meant touching both call sites' destructuring.
+  rows.realGenerationFallbackReason = redteam.useRealGeneration ? realGenerationFallbackReason : null;
   return rows;
 }
 
@@ -3959,11 +3990,12 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
     const cancelled = cancellationResults(rows, cases.length);
     return {
       ...cancelled,
+      realGenerationFallbackReason: allCases.realGenerationFallbackReason || null,
       summary: {
         ...cancelled.summary,
         plugins: new Set(cases.map((item) => item.plugin)).size,
         strategies: new Set(cases.map((item) => item.strategy)).size,
-        generated: cases.filter((item) => item.source === 'generated').length,
+        generated: cases.filter((item) => item.source === 'generated' || item.source === 'generated-live').length,
         custom: cases.filter((item) => item.source === 'custom').length,
         critical: cases.filter((item) => item.severity === 'critical').length,
         high: cases.filter((item) => item.severity === 'high').length,
@@ -3975,11 +4007,12 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
   }
 
   return {
+    realGenerationFallbackReason: allCases.realGenerationFallbackReason || null,
     summary: {
       ...summarizeRows(rows),
       plugins: new Set(cases.map((item) => item.plugin)).size,
       strategies: new Set(cases.map((item) => item.strategy)).size,
-      generated: cases.filter((item) => item.source === 'generated').length,
+      generated: cases.filter((item) => item.source === 'generated' || item.source === 'generated-live').length,
       custom: cases.filter((item) => item.source === 'custom').length,
       critical: cases.filter((item) => item.severity === 'critical').length,
       high: cases.filter((item) => item.severity === 'high').length,
@@ -5230,6 +5263,14 @@ app.patch('/api/targets/:id/stages/:stageKey/config', requireAuth, requireAdmin,
     metadata.redteam = {
       ...existingRedteam,
       purpose: body.purpose !== undefined ? body.purpose : existingRedteam.purpose || '',
+      // Was missing entirely from this route (not just falling back to a wrong default like
+      // the other fields here) — the "Use real adversarial generation" checkbox has silently
+      // been a no-op ever since it shipped, since buildRedTeamCases reads
+      // `redteam.useRealGeneration` but this route never wrote it, so it was always undefined
+      // regardless of what the UI sent. Found while investigating why a live test of the
+      // real-generation-fallback-reason feature kept reporting local-generator results no
+      // matter what plugin was selected.
+      useRealGeneration: body.useRealGeneration !== undefined ? Boolean(body.useRealGeneration) : Boolean(existingRedteam.useRealGeneration),
       plugins: body.plugins !== undefined ? asArray(body.plugins) : asArray(existingRedteam.plugins),
       strategies: body.strategies !== undefined ? asArray(body.strategies) : asArray(existingRedteam.strategies),
       numTests: body.numTests !== undefined ? Number(body.numTests) : Number(existingRedteam.numTests || 5),
@@ -5346,9 +5387,16 @@ app.get('/api/targets/:id/stages/red_team/plan', requireAuth, async (req, res) =
     target: payload.target,
     readiness: payload.readiness.red_team,
     generatedAt: new Date().toISOString(),
+    // Non-null only when useRealGeneration was on and real generation actually fell back to
+    // local templates — lets the UI tell the user real generation didn't happen and why,
+    // instead of silently substituting local probes with no visible difference.
+    realGenerationFallbackReason: cases.realGenerationFallbackReason || null,
     summary: {
       total: cases.length,
-      generated: cases.filter((item) => item.source === 'generated').length,
+      // Counts both the local generator's `'generated'` and the real generator's
+      // `'generated-live'` sources — previously only matched `'generated'`, so a successful
+      // *real* generation run reported 0 "generated" cases in this summary.
+      generated: cases.filter((item) => item.source === 'generated' || item.source === 'generated-live').length,
       custom: cases.filter((item) => item.source === 'custom').length,
       plugins: new Set(cases.map((item) => item.plugin)).size,
       strategies: new Set(cases.map((item) => item.strategy)).size,
