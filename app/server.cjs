@@ -3061,26 +3061,42 @@ async function callGemini({ baseUrl, model, apiKey, systemPrompt, prompt, temper
   };
 }
 
-async function callHttpJson({ baseUrl, apiKey, prompt, systemPrompt, model, temperature, maxTokens }) {
+async function callHttpJson({ baseUrl, apiKey, prompt, systemPrompt, model, temperature, maxTokens, libraryConfig }) {
   if (!baseUrl) throw new Error('HTTP JSON endpoint URL is required');
+  // Custom request/response shape via libraryConfig — same pattern already used by the
+  // GraphQL/WebSocket adapters (config.headers/body-or-variables/responsePath), extended here
+  // since this adapter previously only ever sent one fixed hardcoded body shape and couldn't
+  // actually talk to most real REST APIs, which rarely match that exact schema. Falls back to
+  // the original fixed shape when no libraryConfig is set, so existing targets are unaffected.
+  const config = parseLibraryConfig(libraryConfig, 'method/headers/body/responsePath');
+  const context = { prompt, input: prompt, systemPrompt, model, temperature, maxTokens };
+  const method = String(config.method || 'POST').toUpperCase();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+    ...(config.headers ? deepTemplateSubstitute(config.headers, context) : {}),
+  };
+  const requestBody =
+    config.body !== undefined
+      ? deepTemplateSubstitute(config.body, context)
+      : {
+          prompt,
+          input: prompt,
+          model,
+          systemPrompt,
+          temperature,
+          maxTokens,
+          messages: [
+            ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+            { role: 'user', content: prompt },
+          ],
+        };
   const response = await fetch(baseUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-    },
-    body: JSON.stringify({
-      prompt,
-      input: prompt,
-      model,
-      systemPrompt,
-      temperature,
-      maxTokens,
-      messages: [
-        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        { role: 'user', content: prompt },
-      ],
-    }),
+    method,
+    headers,
+    ...(method !== 'GET' && method !== 'HEAD'
+      ? { body: typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody) }
+      : {}),
   });
   const bodyText = await response.text();
   let body;
@@ -3092,15 +3108,16 @@ async function callHttpJson({ baseUrl, apiKey, prompt, systemPrompt, model, temp
   if (!response.ok) {
     throw new Error(body.error?.message || body.message || bodyText || `HTTP ${response.status}`);
   }
-  const output =
-    body.output ||
-    body.response ||
-    body.answer ||
-    body.text ||
-    body.message?.content ||
-    body.choices?.[0]?.message?.content ||
-    body.raw ||
-    '';
+  const output = config.responsePath
+    ? getByPath(body, config.responsePath)
+    : body.output ||
+      body.response ||
+      body.answer ||
+      body.text ||
+      body.message?.content ||
+      body.choices?.[0]?.message?.content ||
+      body.raw ||
+      '';
   return {
     output: typeof output === 'string' ? output : JSON.stringify(output),
     tokenUsage: body.usage || null,

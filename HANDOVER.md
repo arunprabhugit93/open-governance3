@@ -2918,3 +2918,52 @@ this loop, not an unlimited test double.
       commands were never executed, not just a code-review claim.
       Restored the target's original provider config afterward and
       confirmed a clean regression run.
+
+## Change log — iteration 58 (configurable HTTP-JSON provider request/response shape)
+
+76. Found while reviewing provider adapters for consistency after the
+    security fix: `callHttpJson` sent exactly one fixed, hardcoded
+    request body shape (`{prompt, input, model, systemPrompt,
+    temperature, maxTokens, messages}`) with no way to customize
+    method, headers, body shape, or response extraction — unlike the
+    GraphQL and WebSocket adapters in this same codebase, which already
+    support a `libraryConfig`-driven custom body/headers and
+    `responsePath` extraction. Since most real REST chatbot/API
+    backends don't happen to match that exact fixed schema, the "HTTP
+    JSON" provider — likely the single most commonly needed adapter for
+    testing an arbitrary custom API — could only actually talk to a
+    backend that was specifically built to match this product's own
+    made-up shape. Real promptfoo's own generic HTTP provider
+    (`src/providers/http.ts`) is fully templated for exactly this
+    reason.
+    - `callHttpJson` now accepts an optional `libraryConfig` with
+      `method`, `headers` (templated), `body` (object or string,
+      templated via the same `deepTemplateSubstitute`/real-Nunjucks
+      path as GraphQL variables — filters and all), and `responsePath`
+      (dot path into the JSON response, via the existing `getByPath`
+      helper). Falls back to the exact original fixed shape when
+      `libraryConfig` isn't set — zero behavior change for every
+      existing HTTP-JSON target.
+    - Added the missing "HTTP JSON config (JSON, optional)" UI field
+      (the provider-config editor had branches for every OTHER
+      libraryConfig-capable engine — GraphQL, WebSocket, browser
+      automation, promptfoo-library — but not this one), so the new
+      capability is actually discoverable, not just technically usable
+      via raw API calls.
+    - Verified live via a real HTTP round trip: stood up a local mock
+      REST endpoint with a deliberately unusual response shape
+      (`{result: {nested: {answer: "..."}}}`), configured a real
+      provider with a custom body (`{"userMessage": "{{prompt |
+      upper}}", "meta": {...}}`), a custom header using a different
+      filter (`{{prompt | length}}`), and a `responsePath`, called the
+      real "test provider" endpoint, and confirmed via the mock
+      server's own request log that it received exactly
+      `{"userMessage": "HELLO WORLD", "meta": {"src": "og-test"}}`
+      with header `X-Custom-Auth: Bearer-11` (the real length of
+      "hello world"), while the response correctly extracted
+      `"custom-shape-reply-to: HELLO WORLD"` from the nested path.
+      Then confirmed backward compatibility separately: a provider
+      with no `libraryConfig` sent the exact original fixed-shape
+      request body, unchanged. Restored the target's original provider
+      config afterward and confirmed a clean regression run against the
+      real E2E Groq target.

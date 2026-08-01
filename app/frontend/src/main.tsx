@@ -1584,6 +1584,21 @@ function EvalWorkspace({
                     that provider's Promptfoo config object needs — it's merged in as-is.
                   </p>
                 </div>
+              ) : provider.engine === 'http-json' ? (
+                <div className="field span-2">
+                  <label>HTTP JSON config (JSON, optional)</label>
+                  <textarea
+                    value={provider.libraryConfig || ''}
+                    placeholder={'{"method":"POST","headers":{"X-Custom":"{{prompt | length}}"},"body":{"userMessage":"{{prompt}}"},"responsePath":"result.answer"}'}
+                    onChange={(event) => updateProvider(index, { libraryConfig: event.target.value })}
+                  />
+                  <p className="field-help">
+                    Optional. Defaults to a generic <code>{'{prompt, input, model, messages, ...}'}</code> body. Set{' '}
+                    <code>method</code>, <code>headers</code>, <code>body</code> (object or string; values may use{' '}
+                    <code>{'{{prompt}}'}</code> and filters like <code>{'{{prompt | upper}}'}</code>), and{' '}
+                    <code>responsePath</code> (dot path into the JSON response) to match your API's own schema.
+                  </p>
+                </div>
               ) : provider.engine === 'graphql' ? (
                 <div className="field span-2">
                   <label>GraphQL config (JSON)</label>
