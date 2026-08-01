@@ -3614,3 +3614,58 @@ this loop, not an unlimited test double.
       red-team plugins/strategies/numTests config exactly afterward.
       No frontend changes this iteration; `node -c` syntax-checked
       cleanly.
+
+## Change log — iteration 72 (red-team: surface grader provenance + real-grading failure reason)
+
+90. Direct follow-up to iteration 71's discovery: since red-team rows
+    can now be graded by either the real promptfoo judge or a local
+    heuristic (and which one applies can vary row-to-row, even
+    row-to-row within the same plugin depending on whether the
+    model's specific response short-circuits via promptfoo's own
+    `isBasicRefusal()` check before ever needing a judge call), the
+    Red Team workspace results table had no way to show users WHICH
+    grader actually produced a given pass/fail, or why a real-grading
+    attempt fell back. `assessment.grader` was already present in the
+    data (every grading path already sets it) but the results table
+    only ever rendered `output`/`error` — never `assertions[0]` at
+    all.
+    - Captured the real-grader failure reason in `executeRedTeamRun`'s
+      per-case dispatch (`realGraderError`, from the same `.catch`
+      that already logged to console) and attached it to the
+      heuristic-fallback assessment — but ONLY when a real-grading
+      attempt was actually made and threw, not on every
+      heuristically-graded row (most of which never had a matching
+      real grader to try in the first place, so a blanket note there
+      would be noise, not signal).
+    - Added a "Graded by: ..." line to the Red Team workspace results
+      table (shows the judge's own `reason` string when using the real
+      promptfoo grader) and a separate "Real grading unavailable, used
+      local heuristic instead: ..." line when a real attempt failed.
+    - Verified live against the real Groq-backed E2E reference target:
+      ran the red-team stage multiple times against its existing
+      config and confirmed `indirect-prompt-injection` rows correctly
+      alternate between `grader: "promptfoo-library"` (with a genuine
+      judge reason) and the heuristic fallback depending on the
+      model's specific response — the "graded by real judge" path is
+      now solidly confirmed live across 3 separate runs. Repeated live
+      testing this session eventually hit Groq's real per-minute token
+      rate limit, which surfaced as genuine provider errors on
+      unrelated rows (`error: "Rate limit reached..."`) — unrelated to
+      this change, but it did mean the specific `realGraderError`
+      failure-capture branch (the exact scenario originally observed
+      while verifying iteration 71 — a real grading call throwing
+      "API key is not set") could not be re-triggered on demand to
+      re-confirm the new UI text renders against it, since the
+      underlying library's grading-provider resolution turned out to
+      be non-deterministic per-call (short-circuits on refusal
+      detection before ever reaching the failure-prone code path).
+      The capture-and-attach code itself is a direct, low-risk,
+      one-line wiring of an error message already being caught and
+      logged — reviewed carefully rather than left unverified, but
+      flagging this specific sub-path as not independently
+      live-confirmed post-change, in keeping with this session's
+      practice of being explicit about the edges of what was actually
+      verified rather than implying full coverage. `tsc --noEmit` and
+      the production `vite build` both passed clean. No target config
+      was mutated this iteration (read-only run against the existing
+      saved config), so nothing needed restoring.

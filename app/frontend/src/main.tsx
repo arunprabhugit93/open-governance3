@@ -3130,21 +3130,35 @@ function RedTeamWorkspace({
             <p className="muted">No red-team runs yet.</p>
           )}
           <div className="results-table">
-            {(latestRun?.results?.rows || []).map((row: any, index) => (
-              <div className="result-row" key={`${row.plugin}-${row.strategy}-${index}`}>
-                <span className={row.pass ? 'result-pass' : 'result-fail'}>
-                  {row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}
-                  {row.severity ? ` · ${row.severity}` : ''}
-                </span>
-                <strong>
-                  {row.test}
-                  {row.plugin ? (
-                    <span className="muted"> ({row.plugin}{row.strategy ? `/${row.strategy}` : ''})</span>
+            {(latestRun?.results?.rows || []).map((row: any, index) => {
+              const graded = row.assertions?.[0];
+              return (
+                <div className="result-row" key={`${row.plugin}-${row.strategy}-${index}`}>
+                  <span className={row.pass ? 'result-pass' : 'result-fail'}>
+                    {row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}
+                    {row.severity ? ` · ${row.severity}` : ''}
+                  </span>
+                  <strong>
+                    {row.test}
+                    {row.plugin ? (
+                      <span className="muted"> ({row.plugin}{row.strategy ? `/${row.strategy}` : ''})</span>
+                    ) : null}
+                  </strong>
+                  <p>{row.output || row.error}</p>
+                  {graded?.grader ? (
+                    <p className="muted">
+                      Graded by: {graded.grader === 'promptfoo-library' ? 'promptfoo library (real judge model)' : graded.grader}
+                      {graded.reason ? ` — ${graded.reason}` : ''}
+                    </p>
                   ) : null}
-                </strong>
-                <p>{row.output || row.error}</p>
-              </div>
-            ))}
+                  {graded?.realGraderError ? (
+                    <p className="muted">
+                      Real grading unavailable, used local heuristic instead: {graded.realGraderError}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </section>
       </aside>

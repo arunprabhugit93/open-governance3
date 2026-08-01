@@ -4999,16 +4999,22 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
           'Red-team provider call',
         );
         let assessment = null;
+        let realGraderError = null;
         if (gradingProvider && caseItem.assertType) {
           assessment = await gradeWithRealGrader(target, gradingProvider, redteamPurpose, caseItem, result.output).catch(
             (error) => {
               console.error(`Real grading failed for ${caseItem.plugin}, falling back to local grading:`, error.message);
+              realGraderError = error.message;
               return null;
             },
           );
         }
         if (!assessment) {
           assessment = assessRedTeamOutput(result.output, caseItem, target);
+          // Only surface a failure note when real grading was actually attempted and threw —
+          // not when this row simply had no matching real grader to try in the first place, so
+          // the note stays meaningful rather than appearing on every heuristic-graded row.
+          if (realGraderError) assessment = { ...assessment, realGraderError };
         }
         return {
           provider: provider?.label || target.displayName,
