@@ -2202,3 +2202,54 @@ this loop, not an unlimited test double.
       that the target's full eval config (providers, prompts, dataset
       ID, test cases) exactly matches its pre-test state, then deleted
       the scratch hook script.
+
+## Change log — iteration 43 (schedule webhook: HMAC signature + retry + delivery tracking)
+
+61. Last open item from the external audit: `sendScheduleWebhook` was
+    truly fire-and-forget — no signature, so a receiving endpoint had
+    no way to verify a notification actually came from this product;
+    no retry, so a single transient network blip silently dropped a
+    failure notification; and no delivery-outcome persistence, so a
+    dead webhook URL was invisible anywhere in the product itself
+    (only in server logs, which most users never see).
+    - Added `notify_webhook_secret`, `last_webhook_status`,
+      `last_webhook_at`, `last_webhook_attempts` columns to
+      `target_schedules` (`schema.sql`, applied automatically on
+      startup like every prior migration this session).
+    - `sendScheduleWebhook` now signs the raw JSON body with the
+      schedule's secret (`X-Signature: sha256=<hmac-sha256 hex>`,
+      the same shape as GitHub/Stripe webhook signatures) and retries
+      up to 3 times with exponential backoff (1s/2s/4s) on network
+      failure or a non-2xx response, returning `{ delivered, attempts,
+      error }` instead of swallowing the result — both call sites
+      (`processDueSchedules` and the manual `run-now` route) now await
+      it and persist the outcome.
+    - A signing secret is generated automatically (`crypto.randomBytes
+      (24).toString('hex')`) the first time a webhook URL is set on a
+      schedule if none was supplied, and is only ever returned once in
+      the create/rotate API response — matching this product's
+      existing API-token pattern. `PATCH .../schedules/:id` accepts
+      `rotateWebhookSecret: true` to issue a fresh one; clearing the
+      webhook URL clears the secret too, since a secret with no
+      destination is meaningless. `rowToSchedule` never exposes the
+      raw secret on ordinary reads, only a `notifyWebhookSecretSet`
+      boolean.
+    - Frontend: the Evidence workspace's schedule list now shows
+      "signed (X-Signature)"/"unsigned", the last webhook delivery
+      outcome (status/attempt count/timestamp, in the `error` style
+      when not `delivered`), a "Rotate secret" button per schedule
+      with a webhook configured, and a one-time reveal banner for a
+      freshly generated/rotated secret.
+    - Verified live end to end, not just code review: stood up a real
+      local HTTP receiver, created a real schedule pointing at it,
+      captured the auto-generated secret from the create response,
+      triggered a real `run-now`, and independently recomputed the
+      HMAC-SHA256 of the exact received raw body with the captured
+      secret — it matched the `X-Signature` header exactly, and the
+      schedule's `lastWebhookStatus` correctly showed `delivered` with
+      `lastWebhookAttempts: 1`. Then repointed the same schedule at an
+      unreachable port and reran: confirmed exactly 3 attempts (visible
+      as ~3.2s of real wall-clock time from the 1s+2s backoff) before
+      `lastWebhookStatus` recorded `failed: fetch failed`. Deleted the
+      test schedule and stopped the local receiver afterward. This
+      closes the last of the twelve items from the external audit.

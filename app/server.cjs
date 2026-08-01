@@ -473,6 +473,10 @@ function rowToSchedule(row) {
     lastStatus: row.last_status,
     notifyWebhookUrl: row.notify_webhook_url || '',
     notifyOn: row.notify_on || 'failure',
+    notifyWebhookSecretSet: Boolean(row.notify_webhook_secret),
+    lastWebhookStatus: row.last_webhook_status || null,
+    lastWebhookAt: row.last_webhook_at || null,
+    lastWebhookAttempts: row.last_webhook_attempts ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -4724,23 +4728,45 @@ async function startStageRunAsync(targetId, stageKey, runOptions = {}) {
   return { run: rowToRun(result.rows[0]), detail: await fetchTarget(targetId) };
 }
 
-// Fire-and-forget POST so a slow/unreachable webhook endpoint never blocks or breaks the
-// schedule loop — errors are logged and otherwise swallowed, matching the run itself still
-// being recorded as completed/failed in the DB regardless of whether the notification lands.
-async function sendScheduleWebhook(url, payload) {
-  try {
-    await withTimeout(
-      fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }),
-      10000,
-      'Schedule notification webhook',
-    );
-  } catch (error) {
-    console.error(`Schedule webhook to ${url} failed:`, error.message);
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Never blocks or breaks the schedule loop on a slow/unreachable endpoint (the run itself is
+// already recorded as completed/failed in the DB regardless of whether the notification lands),
+// but unlike a true fire-and-forget it retries transient failures and returns a delivery outcome
+// so the caller can persist it, rather than the result only ever existing in server logs.
+async function sendScheduleWebhook(url, payload, secret) {
+  const body = JSON.stringify(payload);
+  // Signs the raw body with a per-schedule secret so the receiving endpoint can verify the
+  // request actually came from this product and wasn't forged/replayed by a third party —
+  // same shape as GitHub/Stripe webhook signatures: `sha256=<hex hmac>`.
+  const headers = { 'Content-Type': 'application/json' };
+  if (secret) {
+    headers['X-Signature'] = `sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`;
   }
+  const maxAttempts = 3;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await withTimeout(
+        fetch(url, { method: 'POST', headers, body }),
+        10000,
+        'Schedule notification webhook',
+      );
+      if (!response.ok) {
+        throw new Error(`Webhook endpoint responded with HTTP ${response.status}`);
+      }
+      return { delivered: true, attempts: attempt, error: null };
+    } catch (error) {
+      lastError = error;
+      console.error(`Schedule webhook to ${url} failed (attempt ${attempt}/${maxAttempts}):`, error.message);
+      if (attempt < maxAttempts) {
+        await sleep(2 ** (attempt - 1) * 1000);
+      }
+    }
+  }
+  return { delivered: false, attempts: maxAttempts, error: lastError?.message || 'Unknown error' };
 }
 
 async function processDueSchedules() {
@@ -4781,16 +4807,26 @@ async function processDueSchedules() {
     );
     if (schedule.notifyWebhookUrl && (hadFailure || schedule.notifyOn === 'always')) {
       const target = await fetchTarget(schedule.targetId).catch(() => null);
-      sendScheduleWebhook(schedule.notifyWebhookUrl, {
-        event: hadFailure ? 'schedule.failed' : 'schedule.completed',
-        scheduleId: schedule.id,
-        scheduleName: schedule.name,
-        targetId: schedule.targetId,
-        targetName: target?.target?.displayName || null,
-        status: lastStatus,
-        stages: stageSummaries,
-        timestamp: new Date().toISOString(),
-      });
+      const delivery = await sendScheduleWebhook(
+        schedule.notifyWebhookUrl,
+        {
+          event: hadFailure ? 'schedule.failed' : 'schedule.completed',
+          scheduleId: schedule.id,
+          scheduleName: schedule.name,
+          targetId: schedule.targetId,
+          targetName: target?.target?.displayName || null,
+          status: lastStatus,
+          stages: stageSummaries,
+          timestamp: new Date().toISOString(),
+        },
+        row.notify_webhook_secret,
+      );
+      await pool.query(
+        `update target_schedules
+           set last_webhook_status = $1, last_webhook_at = now(), last_webhook_attempts = $2
+         where id = $3`,
+        [delivery.delivered ? 'delivered' : `failed: ${delivery.error}`, delivery.attempts, schedule.id],
+      );
     }
   }
 }
@@ -5458,10 +5494,16 @@ app.post('/api/targets/:id/schedules', requireAuth, requireAdmin, async (req, re
   const nextRunAt = body.nextRunAt ? new Date(body.nextRunAt) : nextRunDate(intervalMinutes);
   const notifyWebhookUrl = String(body.notifyWebhookUrl || '').trim();
   const notifyOn = body.notifyOn === 'always' ? 'always' : 'failure';
+  // A webhook URL with no signing secret can't be verified as genuinely coming from this
+  // product, so one is generated automatically whenever a URL is set and none was supplied —
+  // mirrors the API-token pattern: shown once in this response, never again afterward.
+  const notifyWebhookSecret = notifyWebhookUrl
+    ? String(body.notifyWebhookSecret || '').trim() || crypto.randomBytes(24).toString('hex')
+    : '';
   const inserted = await pool.query(
     `insert into target_schedules
-      (id, target_id, name, stage_keys, interval_minutes, enabled, run_options, next_run_at, notify_webhook_url, notify_on)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      (id, target_id, name, stage_keys, interval_minutes, enabled, run_options, next_run_at, notify_webhook_url, notify_on, notify_webhook_secret)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      returning *`,
     [
       crypto.randomUUID(),
@@ -5474,9 +5516,13 @@ app.post('/api/targets/:id/schedules', requireAuth, requireAdmin, async (req, re
       Number.isNaN(nextRunAt.getTime()) ? nextRunDate(intervalMinutes) : nextRunAt,
       notifyWebhookUrl || null,
       notifyOn,
+      notifyWebhookSecret || null,
     ],
   );
-  res.status(201).json({ schedule: rowToSchedule(inserted.rows[0]) });
+  res.status(201).json({
+    schedule: rowToSchedule(inserted.rows[0]),
+    notifyWebhookSecret: notifyWebhookSecret || null,
+  });
 });
 
 app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, async (req, res) => {
@@ -5497,6 +5543,18 @@ app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, a
   const notifyWebhookUrl =
     body.notifyWebhookUrl !== undefined ? String(body.notifyWebhookUrl || '').trim() : current.notifyWebhookUrl;
   const notifyOn = body.notifyOn !== undefined ? (body.notifyOn === 'always' ? 'always' : 'failure') : current.notifyOn;
+  // Explicit `rotateWebhookSecret: true` generates a fresh secret (returned once, below);
+  // clearing the URL entirely also clears the secret, since a secret with no destination is
+  // meaningless; otherwise the existing secret is left untouched — same non-destructive-PATCH
+  // pattern as every other field on this route.
+  let notifyWebhookSecret = existing.rows[0].notify_webhook_secret || '';
+  let returnedSecret = null;
+  if (!notifyWebhookUrl) {
+    notifyWebhookSecret = '';
+  } else if (body.rotateWebhookSecret === true || (notifyWebhookUrl && !notifyWebhookSecret)) {
+    notifyWebhookSecret = crypto.randomBytes(24).toString('hex');
+    returnedSecret = notifyWebhookSecret;
+  }
   const updated = await pool.query(
     `update target_schedules
        set name = $1,
@@ -5507,8 +5565,9 @@ app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, a
            next_run_at = coalesce($6, next_run_at),
            notify_webhook_url = $7,
            notify_on = $8,
+           notify_webhook_secret = $9,
            updated_at = now()
-     where target_id = $9 and id = $10
+     where target_id = $10 and id = $11
      returning *`,
     [
       String(body.name ?? current.name).trim() || current.name,
@@ -5519,11 +5578,12 @@ app.patch('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, a
       body.nextRunAt ? new Date(body.nextRunAt) : null,
       notifyWebhookUrl || null,
       notifyOn,
+      notifyWebhookSecret || null,
       req.params.id,
       req.params.scheduleId,
     ],
   );
-  res.json({ schedule: rowToSchedule(updated.rows[0]) });
+  res.json({ schedule: rowToSchedule(updated.rows[0]), notifyWebhookSecret: returnedSecret });
 });
 
 app.delete('/api/targets/:id/schedules/:scheduleId', requireAuth, requireAdmin, async (req, res) => {
@@ -5585,21 +5645,34 @@ app.post('/api/targets/:id/schedules/:scheduleId/run-now', requireAuth, requireA
      returning *`,
     [lastStatus, nextRunDate(schedule.intervalMinutes), schedule.id],
   );
+  let finalScheduleRow = updated.rows[0];
   if (schedule.notifyWebhookUrl && (hadFailure || schedule.notifyOn === 'always')) {
     const target = await fetchTarget(req.params.id).catch(() => null);
-    sendScheduleWebhook(schedule.notifyWebhookUrl, {
-      event: hadFailure ? 'schedule.failed' : 'schedule.completed',
-      scheduleId: schedule.id,
-      scheduleName: schedule.name,
-      targetId: req.params.id,
-      targetName: target?.target?.displayName || null,
-      status: lastStatus,
-      stages: stageSummaries,
-      trigger: 'manual',
-      timestamp: new Date().toISOString(),
-    });
+    const delivery = await sendScheduleWebhook(
+      schedule.notifyWebhookUrl,
+      {
+        event: hadFailure ? 'schedule.failed' : 'schedule.completed',
+        scheduleId: schedule.id,
+        scheduleName: schedule.name,
+        targetId: req.params.id,
+        targetName: target?.target?.displayName || null,
+        status: lastStatus,
+        stages: stageSummaries,
+        trigger: 'manual',
+        timestamp: new Date().toISOString(),
+      },
+      result.rows[0].notify_webhook_secret,
+    );
+    const webhookUpdate = await pool.query(
+      `update target_schedules
+         set last_webhook_status = $1, last_webhook_at = now(), last_webhook_attempts = $2
+       where id = $3
+       returning *`,
+      [delivery.delivered ? 'delivered' : `failed: ${delivery.error}`, delivery.attempts, schedule.id],
+    );
+    finalScheduleRow = webhookUpdate.rows[0];
   }
-  res.status(201).json({ schedule: rowToSchedule(updated.rows[0]), runs, detail: await fetchTarget(req.params.id) });
+  res.status(201).json({ schedule: rowToSchedule(finalScheduleRow), runs, detail: await fetchTarget(req.params.id) });
 });
 
 app.get('/api/targets/:id/export/:format', requireAuth, async (req, res) => {

@@ -2913,6 +2913,7 @@ function EvidenceWorkspace({
   const [scheduleWebhookUrl, setScheduleWebhookUrl] = useState('');
   const [scheduleNotifyOn, setScheduleNotifyOn] = useState<'failure' | 'always'>('failure');
   const [scheduleBusy, setScheduleBusy] = useState('');
+  const [revealedWebhookSecret, setRevealedWebhookSecret] = useState<{ scheduleId: string; secret: string } | null>(null);
   const [leftRun, setLeftRun] = useState('');
   const [rightRun, setRightRun] = useState('');
   const [comparison, setComparison] = useState<RunComparison | null>(null);
@@ -2954,7 +2955,7 @@ function EvidenceWorkspace({
     setScheduleBusy('create');
     try {
       const runOptions = scheduleRunOptions.trim() ? JSON.parse(scheduleRunOptions) : {};
-      await createSchedule(token, detail.target.id, {
+      const created = await createSchedule(token, detail.target.id, {
         name: scheduleName,
         stageKeys: scheduleStages,
         intervalMinutes: scheduleInterval,
@@ -2963,9 +2964,29 @@ function EvidenceWorkspace({
         notifyWebhookUrl: scheduleWebhookUrl.trim(),
         notifyOn: scheduleNotifyOn,
       });
+      if (created.notifyWebhookSecret) {
+        setRevealedWebhookSecret({ scheduleId: created.schedule.id, secret: created.notifyWebhookSecret });
+      }
       await loadEvidence();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create schedule');
+    } finally {
+      setScheduleBusy('');
+    }
+  }
+
+  async function handleRotateWebhookSecret(scheduleId: string) {
+    if (isViewer) return;
+    setError('');
+    setScheduleBusy(scheduleId);
+    try {
+      const updated = await updateSchedule(token, detail.target.id, scheduleId, { rotateWebhookSecret: true });
+      if (updated.notifyWebhookSecret) {
+        setRevealedWebhookSecret({ scheduleId, secret: updated.notifyWebhookSecret });
+      }
+      await loadEvidence();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to rotate webhook secret');
     } finally {
       setScheduleBusy('');
     }
@@ -3266,7 +3287,28 @@ function EvidenceWorkspace({
                     Next {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : 'not set'} · Last {schedule.lastStatus || 'not run'}
                   </p>
                   {schedule.notifyWebhookUrl ? (
-                    <p className="muted">Notifies {schedule.notifyOn === 'always' ? 'every run' : 'on failure'} → {schedule.notifyWebhookUrl}</p>
+                    <>
+                      <p className="muted">
+                        Notifies {schedule.notifyOn === 'always' ? 'every run' : 'on failure'} → {schedule.notifyWebhookUrl}
+                        {' · '}
+                        {schedule.notifyWebhookSecretSet ? 'signed (X-Signature)' : 'unsigned'}
+                      </p>
+                      {schedule.lastWebhookStatus ? (
+                        <p className={schedule.lastWebhookStatus === 'delivered' ? 'muted' : 'error'}>
+                          Last webhook: {schedule.lastWebhookStatus}
+                          {schedule.lastWebhookAttempts ? ` (${schedule.lastWebhookAttempts} attempt${schedule.lastWebhookAttempts > 1 ? 's' : ''})` : ''}
+                          {schedule.lastWebhookAt ? ` at ${new Date(schedule.lastWebhookAt).toLocaleString()}` : ''}
+                        </p>
+                      ) : null}
+                      {revealedWebhookSecret?.scheduleId === schedule.id ? (
+                        <p className="field-help">
+                          Webhook secret (shown once, save it now): <code>{revealedWebhookSecret.secret}</code>{' '}
+                          <button className="ghost-button" type="button" onClick={() => setRevealedWebhookSecret(null)}>
+                            Dismiss
+                          </button>
+                        </p>
+                      ) : null}
+                    </>
                   ) : null}
                 </div>
                 <span className="badge">{schedule.enabled ? 'enabled' : 'paused'}</span>
@@ -3276,6 +3318,17 @@ function EvidenceWorkspace({
                 <button className="secondary-button" type="button" disabled={isViewer || scheduleBusy === schedule.id} title={viewerTitle} onClick={() => handleToggleSchedule(schedule)}>
                   {schedule.enabled ? 'Pause' : 'Enable'}
                 </button>
+                {schedule.notifyWebhookUrl ? (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={isViewer || scheduleBusy === schedule.id}
+                    title={viewerTitle}
+                    onClick={() => handleRotateWebhookSecret(schedule.id)}
+                  >
+                    Rotate secret
+                  </button>
+                ) : null}
                 <button className="ghost-button" type="button" disabled={isViewer || scheduleBusy === schedule.id} title={viewerTitle} onClick={() => handleDeleteSchedule(schedule.id)}>
                   Delete
                 </button>

@@ -537,6 +537,11 @@ export interface TargetSchedulePayload {
   runOptions?: Record<string, unknown>;
   notifyWebhookUrl?: string;
   notifyOn?: 'failure' | 'always';
+  // Signs each webhook delivery's raw JSON body (`X-Signature: sha256=<hmac>`). Omit to keep
+  // the existing secret unchanged (or auto-generate one server-side the first time a URL is
+  // set); pass `rotateWebhookSecret: true` to force a fresh one.
+  notifyWebhookSecret?: string;
+  rotateWebhookSecret?: boolean;
 }
 
 export function listSchedules(token: string, id: string): Promise<{ schedules: TargetSchedule[] }> {
@@ -547,8 +552,8 @@ export function createSchedule(
   token: string,
   id: string,
   payload: TargetSchedulePayload,
-): Promise<{ schedule: TargetSchedule }> {
-  return request<{ schedule: TargetSchedule }>(`/api/targets/${id}/schedules`, token, {
+): Promise<{ schedule: TargetSchedule; notifyWebhookSecret: string | null }> {
+  return request<{ schedule: TargetSchedule; notifyWebhookSecret: string | null }>(`/api/targets/${id}/schedules`, token, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -559,8 +564,8 @@ export function updateSchedule(
   id: string,
   scheduleId: string,
   payload: Partial<TargetSchedulePayload>,
-): Promise<{ schedule: TargetSchedule }> {
-  return request<{ schedule: TargetSchedule }>(`/api/targets/${id}/schedules/${scheduleId}`, token, {
+): Promise<{ schedule: TargetSchedule; notifyWebhookSecret: string | null }> {
+  return request<{ schedule: TargetSchedule; notifyWebhookSecret: string | null }>(`/api/targets/${id}/schedules/${scheduleId}`, token, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });

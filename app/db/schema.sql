@@ -104,6 +104,14 @@ create table if not exists target_schedules (
 -- exists` is a no-op against an already-existing table and never picks up new columns).
 alter table target_schedules add column if not exists notify_webhook_url text;
 alter table target_schedules add column if not exists notify_on text not null default 'failure';
+-- Webhook delivery hardening: a per-schedule secret signs each payload (X-Signature: an
+-- HMAC-SHA256 hex digest of the raw body) so the receiving endpoint can verify authenticity,
+-- and delivery outcome/attempt count are persisted so a failed notification is visible in the
+-- product rather than only in server logs.
+alter table target_schedules add column if not exists notify_webhook_secret text;
+alter table target_schedules add column if not exists last_webhook_status text;
+alter table target_schedules add column if not exists last_webhook_at timestamptz;
+alter table target_schedules add column if not exists last_webhook_attempts integer;
 
 create table if not exists app_users (
   id uuid primary key,

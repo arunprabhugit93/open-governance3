@@ -182,6 +182,10 @@ export interface TargetSchedule {
   lastStatus: string | null;
   notifyWebhookUrl: string;
   notifyOn: 'failure' | 'always';
+  notifyWebhookSecretSet: boolean;
+  lastWebhookStatus: string | null;
+  lastWebhookAt: string | null;
+  lastWebhookAttempts: number | null;
   createdAt: string;
   updatedAt: string;
 }
