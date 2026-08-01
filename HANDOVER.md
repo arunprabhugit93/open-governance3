@@ -2870,3 +2870,51 @@ this loop, not an unlimited test double.
       copy in isolation (no live promptfoo CLI invocation available)
       and got the identical correct result. Restored the target's
       provider config afterward and confirmed a clean regression run.
+
+## Change log — iteration 57 (CRITICAL: shell-injection fix in the CLI provider adapter)
+
+75. Found while auditing what else still used pre-iteration-54
+    templating: `callCliProvider` built its command via its own
+    `templateCommand` regex substitution, then executed the fully
+    substituted string with `spawn(command, { shell: true })`. Any
+    prompt — a test case's own `input`, a rendered scenario var, or
+    red-team-**generated** adversarial content (this product literally
+    ships a feature, iteration 45's local red-team templates, that
+    deliberately produces weird/adversarial-looking strings) —
+    containing shell metacharacters (`;`, `|`, backticks, `$()`) would
+    be interpreted as real shell syntax once substituted into that
+    string, not inert text. This is a genuine command-injection
+    vulnerability whenever a CLI-provider target is configured, not a
+    templating-consistency nitpick like the previous two entries — it
+    warranted its own priority regardless of the Nunjucks thread that
+    surfaced it. Cross-checked against real promptfoo's own exec
+    provider (`providers/scriptCompletion.ts`) to confirm the right
+    fix: it uses `child_process.execFile` with an argv array — never a
+    shell — and always appends the prompt as a separate trailing
+    argument rather than templating it into the command string at all.
+    - Kept this product's own `{{prompt}}`-in-command-string
+      configuration UX (a real, already-shipped feature, different
+      from promptfoo's own trailing-argv-only convention) but changed
+      the *execution* mechanism: the templated command is now split
+      into argv parts (`parseCommandParts`, the identical
+      quote-aware-splitting regex real promptfoo's own
+      `parseScriptParts` uses) and run via `execFile` — which never
+      invokes a shell — instead of `spawn(command, {shell: true})` on
+      the raw fully-interpolated string. A prompt containing shell
+      metacharacters is now just literal argument content, never
+      shell-interpreted, regardless of what it contains.
+    - Also upgraded `templateCommand` itself to delegate to
+      `applyTemplate()` (real Nunjucks) instead of its own regex,
+      closing the same templating-consistency gap as the previous two
+      entries for this one remaining spot.
+    - Verified live and unambiguously, with a real injection attempt:
+      configured a real `exec://echo "{{prompt}}"` CLI provider,
+      confirmed normal behavior first (`prompt: "hello there"` →
+      output `"hello there"`), then sent `prompt: "hello; touch
+      /tmp/pwned_test; echo INJECTED"` — the real command output
+      showed the ENTIRE string printed back literally as one piece of
+      inert text, and confirmed via a real filesystem check that
+      `/tmp/pwned_test` was NOT created — proof the `;`-separated shell
+      commands were never executed, not just a code-review claim.
+      Restored the target's original provider config afterward and
+      confirmed a clean regression run.

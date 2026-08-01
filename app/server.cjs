@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 const express = require('express');
 const yaml = require('js-yaml');
@@ -3307,70 +3307,75 @@ function providerInvocationContext({ baseUrl, apiKey, prompt, systemPrompt, mode
 }
 
 function templateCommand(command, context) {
-  let text = String(command || '');
-  const replacements = {
+  return applyTemplate(command, {
     prompt: context.prompt,
     input: context.prompt,
     model: context.model,
     systemPrompt: context.systemPrompt,
     temperature: context.temperature,
     maxTokens: context.maxTokens,
-  };
-  for (const [key, value] of Object.entries(replacements)) {
-    text = text.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g'), String(value ?? ''));
+  });
+}
+
+// Splits a command string into argv parts, honoring quoted segments — same regex real
+// promptfoo's own exec provider uses (providers/scriptCompletion.ts:parseScriptParts).
+function parseCommandParts(commandString) {
+  const regex = /[^\s"']+|"([^"]*)"|'([^']*)'/g;
+  const parts = [];
+  let match;
+  while ((match = regex.exec(commandString)) !== null) {
+    parts.push(match[1] ?? match[2] ?? match[0]);
   }
-  return text;
+  return parts;
 }
 
 async function callCliProvider(args) {
   const context = providerInvocationContext(args);
   const command = templateCommand(String(args.baseUrl || args.model || '').replace(/^exec:\/\//, '').trim(), context);
   if (!command) throw new Error('CLI provider command is required in Base URL or Model');
+  // Split the already-templated command into argv parts and run via execFile — NOT
+  // spawn(command, {shell: true}) on the raw string, which this used to do. A prompt (test-case
+  // input, red-team-generated adversarial content, a rendered scenario var) containing shell
+  // metacharacters (`;`, `|`, backticks, `$()`) would otherwise be interpreted as real shell
+  // syntax after substitution, not inert argument text — a genuine command-injection surface.
+  // execFile never invokes a shell, matching the safety approach real promptfoo's own exec
+  // provider takes (child_process.execFile), even though the command-construction UX differs
+  // (this product substitutes {{prompt}} etc. into a configured command string; promptfoo
+  // always appends prompt as a trailing argv entry with no templating in the command itself).
+  const [executable, ...commandArgs] = parseCommandParts(command);
+  if (!executable) throw new Error('CLI provider command is required in Base URL or Model');
   return new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        OG_PROMPT: context.prompt || '',
-        OG_INPUT: context.prompt || '',
-        OG_MODEL: context.model || '',
-        OG_SYSTEM_PROMPT: context.systemPrompt || '',
-        OG_API_KEY: context.apiKey || '',
-        OG_TEMPERATURE: String(context.temperature ?? ''),
-        OG_MAX_TOKENS: String(context.maxTokens ?? ''),
+    const child = execFile(
+      executable,
+      commandArgs,
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OG_PROMPT: context.prompt || '',
+          OG_INPUT: context.prompt || '',
+          OG_MODEL: context.model || '',
+          OG_SYSTEM_PROMPT: context.systemPrompt || '',
+          OG_API_KEY: context.apiKey || '',
+          OG_TEMPERATURE: String(context.temperature ?? ''),
+          OG_MAX_TOKENS: String(context.maxTokens ?? ''),
+        },
+        timeout: Number(args.timeoutMs || 30000),
+        maxBuffer: 10 * 1024 * 1024,
       },
-      shell: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error('CLI provider timed out'));
-    }, Number(args.timeoutMs || 30000));
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timeout);
-      const text = stdout.trim();
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || text || `CLI provider exited with code ${code}`));
-        return;
-      }
-      try {
-        resolve(normalizeProviderResult(JSON.parse(text)));
-      } catch {
-        resolve(normalizeProviderResult(text));
-      }
-    });
+      (error, stdout, stderr) => {
+        const text = String(stdout || '').trim();
+        if (error) {
+          reject(new Error(String(stderr || '').trim() || text || error.message));
+          return;
+        }
+        try {
+          resolve(normalizeProviderResult(JSON.parse(text)));
+        } catch {
+          resolve(normalizeProviderResult(text));
+        }
+      },
+    );
     child.stdin.end(`${JSON.stringify(context)}\n`);
   });
 }
