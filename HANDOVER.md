@@ -3176,3 +3176,69 @@ this loop, not an unlimited test double.
       target's original audit config afterward and confirmed a clean
       regression run matching the exact known-consistent baseline
       (7/9 pass) from every prior model-audit test this session.
+
+## Change log — iteration 64 (eval rows: surface captured-but-discarded rawResponse/finishReason)
+
+82. Found by tracing a single field (`rawResponse`) from capture to
+    display: every provider adapter (`callOpenAICompatible`,
+    `callAnthropic`, `callGemini`, `callCohere`, `callHttpJson`,
+    `callGraphQL`, `callWebSocketChat`, `callBrowserChatbot`,
+    `callCliProvider`) already returns `rawResponse` and `finishReason`
+    on its result object, and `executeEvalRun()` already threads
+    `rawResponse` into the output-transform context and the assertion
+    context (`providerResponse: result`) — the frontend's own
+    output-transform help text even documents `rawResponse` as
+    available inside transform expressions. But the actual row object
+    returned from `executeEvalRun`'s `mapLimit` callback (all four
+    return sites — success, `afterEach`-hook-failure, `beforeEach`-hook
+    -failure, and the general catch block) never included either
+    field, so once grading finished the real provider response was
+    just discarded — never persisted to `target_stage_runs.results`,
+    never reaching the frontend at all. `buildRunTrace()` (the function
+    backing the "Run trace" detail view, which works across eval /
+    red-team / model-audit alike) had the identical gap on the read
+    side: it mapped a fixed allow-list of fields from each stored row
+    and neither field was on that list, so even a future write-side fix
+    alone wouldn't have surfaced anything in the one UI view actually
+    built for inspecting a single row's full detail.
+    - Added `truncateRawResponseForStorage()` (8000-char cap, matching
+      the `.slice(0, N)` truncation pattern already used elsewhere in
+      this file for judge/error text) so one verbose provider response
+      (embeddings, long tool-call payloads) can't bloat a whole run's
+      stored JSON.
+    - Wired `finishReason`/`rawResponse` (truncated) into all three
+      row-construction sites in `executeEvalRun` that have a `result`
+      available, and into `buildRunTrace()`'s per-row mapping.
+    - Bug caught before it shipped: the pre-existing code declared
+      `let result;` *inside* the `try` block, then referenced it from
+      the `catch` block for `latencyMs`/error handling — `catch` is a
+      sibling block to `try`, not nested inside it, so a `let` inside
+      `try {}` is out of scope in `catch {}`. This had never mattered
+      before because the `catch` block never touched `result`; adding
+      `result?.rawResponse`/`result?.output` there would have been a
+      `ReferenceError` on every single grading failure. Moved the
+      declaration to the enclosing scope (next to the pre-existing
+      `const started = Date.now()`, which already had to live there for
+      the exact same reason) before wiring in the new fields.
+    - Extended `RunTraceRow` and `EvalRun.results.rows[]]` in
+      `types.ts`, and added a collapsible "View raw provider response"
+      `<details>/<pre>` block (reusing the existing `.config-preview`
+      style) plus a finish-reason line to both the Eval workspace's
+      "Latest run" results table and the cross-stage "Run trace" detail
+      view in `main.tsx`.
+    - Verified live against the real Groq-backed E2E reference target:
+      ran a real eval via the actual REST API and confirmed the
+      returned row carried the full genuine Groq `chat.completion`
+      response body (id, model, `x_groq` request id, real token usage,
+      `finish_reason: "stop"`) — not a placeholder — and confirmed the
+      `/runs/:id` trace endpoint returned the identical data. Confirmed
+      the new UI code renders correctly by inspecting the live DOM
+      (`document.querySelectorAll('details')` found the "View raw
+      provider response" summary, `resultsTables: 1`) after opening the
+      real Eval workspace against this run, since the Browser preview
+      pane in this session had a screenshot-rendering fault unrelated
+      to this change (confirmed via console-error and computed-style
+      checks — no JS errors, `opacity`/`visibility` normal, non-empty
+      React root — so the DOM-level check stands in for a visual one
+      here). `tsc --noEmit` and the production `vite build` both passed
+      clean.

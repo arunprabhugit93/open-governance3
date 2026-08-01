@@ -137,6 +137,8 @@ export interface EvalRun {
       assertions?: Array<Record<string, unknown>>;
       tokenUsage?: Record<string, unknown> | null;
       namedScores?: Record<string, number>;
+      finishReason?: string | null;
+      rawResponse?: unknown;
     }>;
   };
   error: string | null;
@@ -241,6 +243,8 @@ export interface RunTraceRow {
   latencyMs: number | null;
   tokenUsage: Record<string, unknown> | null;
   assertions: Array<Record<string, unknown>>;
+  finishReason: string | null;
+  rawResponse: unknown;
 }
 
 export interface TargetReport {

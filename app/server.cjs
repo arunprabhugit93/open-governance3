@@ -582,6 +582,8 @@ function buildRunTrace(run) {
     latencyMs: row.latencyMs || null,
     tokenUsage: row.tokenUsage || null,
     assertions: row.assertions || [],
+    finishReason: row.finishReason || null,
+    rawResponse: row.rawResponse ?? null,
   }));
 }
 
@@ -3940,8 +3942,8 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
       prompt: task.prompt,
       runOptions,
     });
+    let result;
     try {
-      let result;
       let latencyMs;
       let cacheHit = false;
       const cached = cacheEnabled ? await readEvalCache(target.id, cacheKey) : null;
@@ -4044,6 +4046,8 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
             cacheKey,
             latencyMs,
             tokenUsage: result.tokenUsage,
+            finishReason: result.finishReason || null,
+            rawResponse: truncateRawResponseForStorage(result.rawResponse),
           };
         }
       }
@@ -4064,6 +4068,8 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         cacheKey,
         latencyMs,
         tokenUsage: result.tokenUsage,
+        finishReason: result.finishReason || null,
+        rawResponse: truncateRawResponseForStorage(result.rawResponse),
       };
     } catch (error) {
       return {
@@ -4074,12 +4080,14 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         provider: task.provider.label,
         test: task.test.description,
         prompt: task.prompt,
-        output: '',
+        output: result?.output || '',
         assertions: task.assertions,
         pass: false,
         error: error.message,
         cacheHit: false,
         cacheKey,
+        finishReason: result?.finishReason || null,
+        rawResponse: truncateRawResponseForStorage(result?.rawResponse),
         latencyMs: Date.now() - started,
       };
     }
@@ -4172,6 +4180,24 @@ function computeDerivedMetrics(namedScores, derivedMetrics, rowCount) {
     }
   }
   return derived;
+}
+
+// Raw provider responses can be arbitrarily large (embeddings, verbose tool-call payloads).
+// Cap what gets persisted per row so one chatty response can't bloat the whole run record.
+const MAX_STORED_RAW_RESPONSE_CHARS = 8000;
+function truncateRawResponseForStorage(rawResponse) {
+  if (rawResponse === null || rawResponse === undefined) return null;
+  let serialized;
+  try {
+    serialized = typeof rawResponse === 'string' ? rawResponse : JSON.stringify(rawResponse);
+  } catch (error) {
+    return null;
+  }
+  if (!serialized) return null;
+  if (serialized.length <= MAX_STORED_RAW_RESPONSE_CHARS) {
+    return typeof rawResponse === 'string' ? rawResponse : rawResponse;
+  }
+  return `${serialized.slice(0, MAX_STORED_RAW_RESPONSE_CHARS)}... [truncated ${serialized.length - MAX_STORED_RAW_RESPONSE_CHARS} more chars]`;
 }
 
 function summarizeRows(rows) {

@@ -2336,6 +2336,15 @@ function EvalWorkspace({
                 <span className={row.pass ? 'result-pass' : 'result-fail'}>{row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}</span>
                 <strong>{row.test}</strong>
                 <p>{row.output || row.error}</p>
+                {row.finishReason ? <p className="muted">Finish reason: {row.finishReason}</p> : null}
+                {row.rawResponse !== undefined && row.rawResponse !== null ? (
+                  <details>
+                    <summary>View raw provider response</summary>
+                    <pre className="config-preview">
+                      {typeof row.rawResponse === 'string' ? row.rawResponse : JSON.stringify(row.rawResponse, null, 2)}
+                    </pre>
+                  </details>
+                ) : null}
               </div>
             ))}
           </div>
@@ -3898,7 +3907,21 @@ function EvidenceWorkspace({
                   <dd>{row.output || row.error || 'No output captured'}</dd>
                   <dt>Assertions</dt>
                   <dd>{row.assertions.length ? JSON.stringify(row.assertions) : 'No assertions captured'}</dd>
+                  {row.finishReason ? (
+                    <>
+                      <dt>Finish reason</dt>
+                      <dd>{row.finishReason}</dd>
+                    </>
+                  ) : null}
                 </dl>
+                {row.rawResponse !== undefined && row.rawResponse !== null ? (
+                  <details>
+                    <summary>View raw provider response</summary>
+                    <pre className="config-preview">
+                      {typeof row.rawResponse === 'string' ? row.rawResponse : JSON.stringify(row.rawResponse, null, 2)}
+                    </pre>
+                  </details>
+                ) : null}
               </div>
             ))
           ) : (
