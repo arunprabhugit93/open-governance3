@@ -491,7 +491,27 @@ function summaryFromRun(run) {
     fail: Number(summary.fail || 0),
     error: Number(summary.error || 0),
     passRate: Number(summary.passRate || 0),
+    namedScores: summary.namedScores && typeof summary.namedScores === 'object' ? summary.namedScores : {},
+    derivedMetrics: summary.derivedMetrics && typeof summary.derivedMetrics === 'object' ? summary.derivedMetrics : {},
   };
+}
+
+// Per-metric delta (right minus left) across the union of both runs' named-score/derived-metric
+// keys — a metric present on only one side still shows up, with the missing side treated as 0,
+// same convention as the existing pass/fail/error deltas.
+function metricDeltas(leftMetrics, rightMetrics) {
+  const keys = new Set([...Object.keys(leftMetrics || {}), ...Object.keys(rightMetrics || {})]);
+  const deltas = {};
+  for (const key of keys) {
+    const leftValue = Number(leftMetrics?.[key]);
+    const rightValue = Number(rightMetrics?.[key]);
+    deltas[key] = {
+      left: Number.isFinite(leftValue) ? leftValue : null,
+      right: Number.isFinite(rightValue) ? rightValue : null,
+      delta: Number.isFinite(leftValue) && Number.isFinite(rightValue) ? rightValue - leftValue : null,
+    };
+  }
+  return deltas;
 }
 
 function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValue = '') {
@@ -6749,6 +6769,8 @@ app.get('/api/targets/:id/runs/compare', requireAuth, async (req, res) => {
       fail: rightSummary.fail - leftSummary.fail,
       error: rightSummary.error - leftSummary.error,
       passRate: rightSummary.passRate - leftSummary.passRate,
+      namedScores: metricDeltas(leftSummary.namedScores, rightSummary.namedScores),
+      derivedMetrics: metricDeltas(leftSummary.derivedMetrics, rightSummary.derivedMetrics),
     },
     changed,
   });

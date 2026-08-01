@@ -2694,3 +2694,37 @@ this loop, not an unlimited test double.
       turn's instruction. Restored the target's prompts/testCases to
       their original state and confirmed a clean regression run
       afterward.
+
+## Change log — iteration 53 (surface named-score/derived-metric deltas in run comparison)
+
+71. Follow-up to iteration 49's `derivedMetrics` work: the
+    `/runs/compare` route and Evidence workspace's "Compare runs"
+    panel only ever compared pass/fail/error/passRate — the new
+    `namedScores`/`derivedMetrics` summary fields weren't broken by
+    that (additive, so nothing crashed) but were also invisible there,
+    which defeats a lot of the point of tracking a custom metric like
+    F1 over time if you can't see how it moved between two runs.
+    - `summaryFromRun()` now also returns `namedScores`/`derivedMetrics`
+      (previously only pass/fail/error/passRate/total).
+    - New `metricDeltas(left, right)` helper: per-metric
+      `{left, right, delta}` across the UNION of both runs' metric
+      keys (a metric present on only one side still shows up, missing
+      side reported as `null` rather than silently dropped) — added to
+      the compare response's `delta.namedScores`/`delta.derivedMetrics`.
+    - Frontend: `RunComparison` type extended; the Evidence workspace's
+      comparison panel now shows a `name: left → right (+delta)` line
+      for both named scores and derived metrics when either run has
+      any.
+    - Verified live and exactly, real UI clicks included: seeded two
+      separate real eval runs against the E2E Groq target with
+      different `namedScores.quality` values (0.5, then 0.9 — via a
+      real `afterEach` hook, edited between the two runs since the
+      hook module reloads fresh per invocation so in-memory counters
+      don't persist across runs) via direct API calls, confirmed the
+      compare endpoint returned the exact expected
+      `{left: 0.5, right: 0.9, delta: 0.4}`; then, separately, drove
+      the real Evidence workspace UI — selected both real runs from
+      the real dropdowns, clicked the real "Compare" button, and
+      confirmed the rendered panel read exactly "Named score deltas:
+      quality: 0.5 → 0.9 (+0.400)". Restored the target's `extensions`
+      field afterward.

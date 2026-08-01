@@ -291,6 +291,8 @@ export interface RunComparison {
     fail: number;
     error: number;
     passRate: number;
+    namedScores?: Record<string, { left: number | null; right: number | null; delta: number | null }>;
+    derivedMetrics?: Record<string, { left: number | null; right: number | null; delta: number | null }>;
   };
   changed: Array<{
     test: string;

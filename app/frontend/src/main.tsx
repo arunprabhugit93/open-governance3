@@ -3870,12 +3870,30 @@ function EvidenceWorkspace({
           </button>
         </div>
         {comparison ? (
-          <div className="run-summary">
-            <div><span>Pass delta</span><strong>{comparison.delta.pass}</strong></div>
-            <div><span>Fail delta</span><strong>{comparison.delta.fail}</strong></div>
-            <div><span>Error delta</span><strong>{comparison.delta.error}</strong></div>
-            <div><span>Changed</span><strong>{comparison.changed.length}</strong></div>
-          </div>
+          <>
+            <div className="run-summary">
+              <div><span>Pass delta</span><strong>{comparison.delta.pass}</strong></div>
+              <div><span>Fail delta</span><strong>{comparison.delta.fail}</strong></div>
+              <div><span>Error delta</span><strong>{comparison.delta.error}</strong></div>
+              <div><span>Changed</span><strong>{comparison.changed.length}</strong></div>
+            </div>
+            {comparison.delta.namedScores && Object.keys(comparison.delta.namedScores).length ? (
+              <p className="muted">
+                Named score deltas:{' '}
+                {Object.entries(comparison.delta.namedScores)
+                  .map(([name, d]) => `${name}: ${d.left ?? '—'} → ${d.right ?? '—'} (${d.delta === null ? 'n/a' : (d.delta >= 0 ? '+' : '') + d.delta.toFixed(3)})`)
+                  .join(', ')}
+              </p>
+            ) : null}
+            {comparison.delta.derivedMetrics && Object.keys(comparison.delta.derivedMetrics).length ? (
+              <p className="muted">
+                Derived metric deltas:{' '}
+                {Object.entries(comparison.delta.derivedMetrics)
+                  .map(([name, d]) => `${name}: ${d.left ?? '—'} → ${d.right ?? '—'} (${d.delta === null ? 'n/a' : (d.delta >= 0 ? '+' : '') + d.delta.toFixed(3)})`)
+                  .join(', ')}
+              </p>
+            ) : null}
+          </>
         ) : null}
       </section>
     </div>
