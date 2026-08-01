@@ -2728,3 +2728,60 @@ this loop, not an unlimited test double.
       confirmed the rendered panel read exactly "Named score deltas:
       quality: 0.5 → 0.9 (+0.400)". Restored the target's `extensions`
       field afterward.
+
+## Change log — iteration 54 (real Nunjucks prompt templating — a foundational gap)
+
+72. Real promptfoo templates every prompt with full Nunjucks
+    (`util/templates.ts:getNunjucksEngine`) — filters
+    (`{{ x | upper }}`), control flow (`{% if %}`/`{% for %}`), a
+    built-in `load` (JSON.parse) filter, custom filters. This
+    product's `applyTemplate()` was a narrow regex
+    (`/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g`) that only ever substituted a
+    bare variable name — any filter, loop, or conditional in a prompt
+    template silently never rendered; it would have been sent to the
+    real provider completely literally (`{% for x in y %}` and all),
+    almost certainly breaking the eval. This touches every single
+    prompt in the product, so it's about as foundational a gap as this
+    session has found — most of the earlier "generate"/"optimize"
+    features assumed working templating underneath them.
+    - `nunjucks` turned out to already be present in `node_modules` —
+      same situation as `mathjs` in iteration 49: an incidental
+      transitive dependency of the vendored `promptfoo` package, not
+      declared by this product's own `package.json`. Added explicitly
+      (`^3.2.4`, matching the already-installed version).
+    - Replaced `applyTemplate()`'s body with real
+      `nunjucksEnv.renderString()`, configured to match real
+      promptfoo's own defaults: `autoescape: false` (this is plain
+      text going to an LLM, not HTML), `throwOnUndefined: false` (a
+      missing var renders empty, matching the old regex's behavior),
+      and the same `load` filter for JSON-parsing a string inline.
+      Falls back to returning the raw unrendered template on a genuine
+      parse error rather than throwing, since this runs in a
+      synchronous task-building loop ahead of `executeEvalRun`'s
+      per-row try/catch — throwing here would abort the whole run
+      instead of failing just one row, and the unrendered text almost
+      certainly fails its own assertion anyway, surfacing the problem
+      as an ordinary test failure.
+    - **Deliberate deviation from real promptfoo**: real promptfoo
+      exposes `{{env.*}}` as a template global backed by `process.env`
+      by default, only disabling it in self-hosted mode. This product
+      IS self-hosted — its own process holds DB credentials and JWT
+      secrets — and template output can be sent verbatim to arbitrary
+      third-party LLM providers, so exposing `env` at all would be a
+      real secret-exfiltration path (e.g. a redteam-generated or
+      user-authored prompt containing `{{env.DATABASE_URL}}`). `env` is
+      never registered as a template global here, full stop, matching
+      the spirit of promptfoo's own self-hosted-safe default rather
+      than its permissive one.
+    - Verified live and precisely: wrote a real prompt template
+      exercising all three previously-broken features at once — a
+      filter (`{{ word | upper }}`), a `{% for %}` loop over a list
+      with a `{% if not loop.last %}` comma-separator conditional, and
+      a plain `{% if flag %}...{% else %}...{% endif %}` branch — ran
+      a real eval against the E2E Groq target, and confirmed the
+      row's actual rendered `prompt` field read EXACTLY
+      `"...READY-A,B,C-ON"` (uppercased, comma-joined without a
+      trailing comma, correct branch taken), with the real model
+      echoing it back and passing. Restored the target's config
+      afterward and confirmed a clean regression run on the plain
+      `{{prompt}}` case, unaffected.

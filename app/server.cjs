@@ -12,6 +12,7 @@ const yaml = require('js-yaml');
 const WebSocket = require('ws');
 const { Pool } = require('pg');
 const math = require('mathjs');
+const nunjucks = require('nunjucks');
 const {
   SUPPORTED_TARGET_TYPES,
   TEST_FLOW_STAGES,
@@ -1129,10 +1130,32 @@ function buildPromptfooConfig(target) {
   };
 }
 
+// Real promptfoo templates prompts with full Nunjucks (util/templates.ts:getNunjucksEngine) —
+// filters, {% if %}/{% for %} control flow, the `load` (JSON.parse) filter — not just bare
+// {{var}} substitution. This product's own prompt rendering was a much narrower regex that
+// silently no-op'd on anything beyond a plain variable name, meaning filters/loops/conditionals
+// in a prompt template never actually worked. Configured to match promptfoo's own defaults
+// (`autoescape: false`, `throwOnUndefined: false` so a missing var renders empty rather than
+// erroring) with one deliberate deviation: real promptfoo exposes `{{env.*}}` as a template
+// global reading `process.env` by default (only opting out in self-hosted mode via
+// PROMPTFOO_DISABLE_TEMPLATE_ENV_VARS) — this product IS self-hosted, its own process holds DB
+// credentials and JWT secrets, and template output can be sent verbatim to arbitrary
+// third-party LLM providers, so `env` is never exposed here regardless of any env var.
+const nunjucksEnv = nunjucks.configure({ autoescape: false, throwOnUndefined: false });
+nunjucksEnv.addFilter('load', (str) => JSON.parse(str));
+
 function applyTemplate(template, vars) {
-  return String(template || '').replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key) =>
-    vars[key] === undefined ? '' : String(vars[key]),
-  );
+  const text = String(template || '');
+  try {
+    return nunjucksEnv.renderString(text, vars || {});
+  } catch (error) {
+    // Malformed template syntax (e.g. an unclosed {% if %}) falls back to the raw, unrendered
+    // template rather than throwing — this runs in a synchronous task-building loop ahead of
+    // the per-row try/catch in executeEvalRun, so throwing here would abort the entire run
+    // instead of failing just the affected row. The unrendered text almost certainly fails its
+    // assertion anyway, surfacing the problem as a normal test failure the user can see and fix.
+    return text;
+  }
 }
 
 function wildcardToRegExp(pattern) {
