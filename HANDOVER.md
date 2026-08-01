@@ -2996,3 +2996,36 @@ this loop, not an unlimited test double.
       config with no `libraryConfig` sent the exact original fixed
       body shape (including the target's real configured
       `systemPrompt` text) unchanged.
+
+## Change log — iteration 60 (real CSV parser for bulk test-case import)
+
+78. After a comprehensive live regression sweep across all three
+    stages (eval/red-team/model-audit, all clean) confirmed today's
+    run of provider/templating changes hadn't broken anything, went
+    looking for a different class of gap — a genuine correctness bug
+    rather than a missing feature. Found one in the Eval workspace's
+    "Bulk upload" CSV fallback: `bulkText.split('\n').map(line =>
+    line.split(','))` — zero quote handling. Any field legitimately
+    containing a comma (e.g. an `expected` value like "apple, banana,
+    cherry") would silently split into extra misaligned columns, and a
+    quoted field with an embedded newline would get chopped into a
+    spurious extra row. Silent data corruption on import, not a crash
+    — the kind of bug that's easy to never notice until a real user
+    pastes real CSV data with a comma in a cell.
+    - Added `parseCsv(text): string[][]`, a small dependency-free
+      RFC4180-ish parser (quoted fields, `""` as an escaped quote,
+      commas/newlines inside quoted fields) and swapped it in for the
+      naive split.
+    - Verified live via real browser interaction, not a unit test:
+      logged in, opened the real Eval workspace, set the bulk-upload
+      textarea via a real input event to CSV containing both a comma
+      inside a quoted field (`"Reply with a list: apple, banana,
+      cherry"`) and a quoted field with an embedded newline
+      (`"Multi\nline value"`), clicked the real "Import test cases"
+      button, and confirmed via the actual rendered test-case editor
+      inputs that both fields came through completely intact — the
+      comma preserved as literal text within one field, and the
+      embedded newline correctly kept within one field rather than
+      spawning a spurious third row. Confirmed the target's stored
+      config was untouched throughout (bulk import is local-only until
+      an explicit save) — no restore needed.

@@ -239,6 +239,64 @@ function assertionHelp(assertion: string): string {
   }
 }
 
+// RFC4180-ish CSV parser: handles quoted fields, "" as an escaped quote inside a quoted field,
+// and commas/newlines inside quoted fields — a plain `line.split(',')` (the previous approach)
+// silently corrupts any field containing a comma (e.g. an expected value like
+// "apple, banana, cherry") or breaks a quoted multi-line field into separate rows.
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+  while (i < text.length) {
+    const char = text[i];
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i += 1;
+        continue;
+      }
+      field += char;
+      i += 1;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = true;
+      i += 1;
+      continue;
+    }
+    if (char === ',') {
+      row.push(field.trim());
+      field = '';
+      i += 1;
+      continue;
+    }
+    if (char === '\r') {
+      i += 1;
+      continue;
+    }
+    if (char === '\n') {
+      row.push(field.trim());
+      if (row.some((cell) => cell !== '')) rows.push(row);
+      row = [];
+      field = '';
+      i += 1;
+      continue;
+    }
+    field += char;
+    i += 1;
+  }
+  row.push(field.trim());
+  if (row.some((cell) => cell !== '')) rows.push(row);
+  return rows;
+}
+
 function assertionsForCase(testCase: EvalStageConfigPayload['testCases'][number]): EvalAssertion[] {
   return testCase.assertions?.length
     ? testCase.assertions
@@ -1214,11 +1272,7 @@ function EvalWorkspace({
     } catch {
       // Fall through to CSV parser.
     }
-    const rows = bulkText
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => line.split(',').map((cell) => cell.trim()));
+    const rows = parseCsv(bulkText);
     if (rows.length) {
       const dataRows = rows[0]?.[0]?.toLowerCase() === 'name' ? rows.slice(1) : rows;
       setTestCases(
