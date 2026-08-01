@@ -3135,3 +3135,44 @@ this loop, not an unlimited test double.
       confirmed all three matched their known-consistent prior results
       exactly — zero regression from either `toYaml` change this
       session.
+
+## Change log — iteration 63 (model-audit: enable real remote scanning)
+
+81. Found by reading the actual `modelaudit` CLI's own `--help` text
+    (`modelaudit scan --help`), not guessed: it explicitly documents
+    scanning `hf://`, `s3://`, `gs://`, MLflow `models:/`, and plain
+    https:// (HuggingFace, PyTorch Hub) references DIRECTLY — no local
+    download needed. But `executeModelAuditRun()`'s malware-check block
+    was gated on `resolveLocalArtifactPath()`, which deliberately
+    returns `null` for any URL-shaped path (the correct behavior for
+    the *other* local-file-only scanners in this file — secrets,
+    dependency-risk, model-card presence — which genuinely can't work
+    without direct file access). That same `null` was also silently
+    skipping the `modelaudit` CLI check — the ONE scanner in this
+    product actually capable of remote scanning — for exactly the
+    artifact paths where it matters most: a vendor-hosted model on
+    HuggingFace or S3, arguably the single most common real case for
+    this whole stage (the field's own placeholder text already said
+    "/models/model.gguf or registry/repo", implying remote scanning
+    was always meant to work).
+    - Added `MODEL_AUDIT_REMOTE_SCHEME` (matching exactly the schemes
+      `modelaudit` itself documents) and a `modelAuditTarget` variable:
+      the resolved local path when one exists, otherwise the raw
+      artifact path string when it looks like one of those remote
+      schemes — used only for the malware-check gate, leaving every
+      other scanner's local-only behavior completely unchanged.
+    - Verified live and about as rigorously as this session gets: (1)
+      confirmed real outbound network access first, then ran the real
+      `modelaudit` CLI directly against a real public HuggingFace
+      model (`hf://julien-c/dummy-unknown`) — it genuinely downloaded
+      and scanned the model in ~10s, well inside the existing 120s
+      timeout; (2) configured a real target's audit stage with that
+      exact `hf://` artifact path and the `malware` scanner enabled
+      through the actual REST API, ran a real model-audit stage run,
+      and confirmed the row read "Malware indicators (modelaudit CLI):
+      modelaudit scanned 7 file(s), 5 non-critical finding(s), no
+      critical/dangerous indicators found" — a genuine result from a
+      genuine remote scan, not a skip/fallback message. Restored the
+      target's original audit config afterward and confirmed a clean
+      regression run matching the exact known-consistent baseline
+      (7/9 pass) from every prior model-audit test this session.

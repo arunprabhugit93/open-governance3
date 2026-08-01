@@ -5082,12 +5082,24 @@ function findArtifactFile(rootPath, namePattern) {
   return match;
 }
 
+// The real `modelaudit` CLI documents scanning these directly (`modelaudit scan --help`):
+// HuggingFace (`hf://`, or a plain https://huggingface.co/... URL), S3 (`s3://`), GCS (`gs://`),
+// MLflow registry (`models:/`), and generic http(s) URLs (e.g. a pytorch.org hub reference) —
+// no local download needed. `resolveLocalArtifactPath` deliberately returns null for all of
+// these (correct for the *other* scanners in this file, which genuinely need direct file
+// access), but that same null was also silently skipping the modelaudit CLI check — the one
+// scanner actually capable of remote scanning — for exactly the artifact paths where it matters
+// most (a vendor-hosted model on HuggingFace or S3, the most common real case for this stage).
+const MODEL_AUDIT_REMOTE_SCHEME = /^(https?|s3|gs|hf|models):/i;
+
 async function executeModelAuditRun(target) {
   const metadata = target.metadata || {};
   const audit = metadata.audit || {};
   const provider = metadata.provider || {};
   const runtime = metadata.runtime || {};
   const artifactRoot = resolveLocalArtifactPath(audit.artifactPath);
+  const rawArtifactPath = String(audit.artifactPath || '').trim();
+  const modelAuditTarget = artifactRoot || (MODEL_AUDIT_REMOTE_SCHEME.test(rawArtifactPath) ? rawArtifactPath : null);
 
   const checks = [
     {
@@ -5260,8 +5272,8 @@ async function executeModelAuditRun(target) {
   }
 
   if (selectedScanners.includes('malware')) {
-    if (artifactRoot) {
-      const cli = await runModelAuditCli(artifactRoot);
+    if (modelAuditTarget) {
+      const cli = await runModelAuditCli(modelAuditTarget);
       if (!cli.available) {
         checks.push({
           key: 'malware',
