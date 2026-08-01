@@ -2375,3 +2375,48 @@ this loop, not an unlimited test double.
       the target's actually-stored config was untouched throughout
       (still just the original single "Baseline utility test") — no
       restore needed because nothing was ever persisted.
+
+## Change log — iteration 46 (AI-generated assertion synthesis)
+
+64. Companion to iteration 45's dataset synthesis: real promptfoo also
+    has a `generate assertions` command (`src/assertions/synthesis.ts`)
+    that writes objective evaluation questions for a prompt and applies
+    them as `llm-rubric`/`g-eval`/`pi` assertions on `defaultTest.assert`
+    (config-level, applies to every test case). This product had no
+    equivalent. Implemented with an independently-written prompt (NOT
+    copied from promptfoo's own much longer prompt-engineering text —
+    same core idea, materially different and shorter wording) and
+    skipping the `pi` type (a third-party scorer this engine doesn't
+    implement) and the python-function-conversion step (an
+    optimization, not core to the feature).
+    - Backend: `generateEvalAssertionsForTarget()` reuses the same
+      judge/eval-provider fallback chain as dataset synthesis. New
+      preview-only route `POST /api/targets/:id/stages/eval/generate-
+      assertions`, informed by whatever assertions already exist
+      (both `redteam.defaultTest.assert` and each test case's own
+      assertions) so it doesn't propose duplicates.
+    - Frontend: added a "Generate assertions" sub-section directly
+      inside the RedTeamWorkspace's existing "Default test assertions"
+      editor (not a new section) — that's the single shared
+      config-level `defaultTest` this product already wires into both
+      Eval and Red-team execution (see iteration comments at
+      `server.cjs:1042` and `:1048`), so this is the correct place for
+      generated assertions to land rather than inventing a
+      second, eval-only `defaultTest`. "Add all to defaults" merges the
+      preview into the existing `defaultAssertRows` editor state.
+    - Verified live and thoroughly: (1) called the route directly
+      against the real E2E target, got back 4 genuinely objective,
+      on-topic evaluation questions in ~0.6s; (2) drove the actual
+      browser UI — real login, real navigation to the Red-team
+      workspace, a real click on "Generate preview" (5 real, distinct
+      questions rendered), a real click on "Add all to defaults" (all
+      5 appeared in the editable `defaultAssertRows` inputs), a real
+      click on the existing "Save config" button, then a fresh GET
+      confirmed all 5 persisted to `redteam.defaultTest.assert` exactly
+      as previewed; (3) ran a real eval against the E2E Groq target and
+      confirmed all 5 generated assertions were actually graded
+      alongside the test case's own assertion (6 total, each with a
+      real pass/fail outcome) — proving the existing defaultTest.assert
+      execution wiring picks up AI-generated assertions the same as
+      manually-authored ones. Restored `defaultTest.assert` to `[]`
+      afterward.

@@ -1973,6 +1973,82 @@ async function generateEvalDatasetForTarget(target, options = {}) {
   }));
 }
 
+function assertionQuestionsPrompt(prompts, existingAssertions, numQuestions, instructions) {
+  const promptsBlock = prompts.map((prompt) => `<Prompt>\n${prompt}\n</Prompt>`).join('\n');
+  const existingBlock = existingAssertions.length
+    ? `These evaluation criteria already exist for this application — write DIFFERENT ones, not duplicates:\n${JSON.stringify(existingAssertions)}`
+    : 'No evaluation criteria exist yet for this application.';
+  return `You are designing objective, automatically-gradable evaluation questions for grading an LLM application's individual responses.\n\nHere is the application's prompt:\n${promptsBlock}\n\n${existingBlock}\n\nWrite ${numQuestions} new evaluation questions that grade a single response on its own merits, not the system as a whole. Rules:\n- Phrase each question so that a "Yes" answer always means the response passed.\n- Prefer objective, measurable criteria over subjective ones — e.g. "Is the response under 100 words?" instead of "Is the response concise?"\n- Each question should test exactly one attribute.\n- The question must be answerable using only the prompt and the response text — no outside knowledge required.${instructions ? `\n- ${instructions}` : ''}\n\nRespond ONLY as JSON: {"questions": [{"label": "short title, max 3 words", "question": "the question text"}]}`;
+}
+
+// Mirrors real promptfoo's `generate assertions` command (src/assertions/synthesis.ts): ask an
+// LLM to write objective evaluation questions for the prompt, informed by whatever assertions
+// already exist so it doesn't repeat them. The prompt text here is independently written for
+// this product, not copied from promptfoo's own (much longer, more elaborate) prompt-engineering
+// — this covers the same core idea without reproducing their specific wording. Skips promptfoo's
+// `pi` assertion type (a third-party scorer this product's engine doesn't implement) and its
+// python-function-conversion step (an optimization, not required for the feature's core value).
+async function generateEvalAssertionsForTarget(target, options = {}) {
+  const evalConfig = target.metadata?.eval || {};
+  const prompts = asArray(evalConfig.prompts)
+    .map((prompt) => prompt.content)
+    .filter(Boolean);
+  if (!prompts.length) {
+    throw new Error('Add at least one prompt to this eval before generating assertions.');
+  }
+  const existingAssertions = asArray(target.metadata?.redteam?.defaultTest?.assert)
+    .concat(asArray(evalConfig.testCases).flatMap((testCase) => asArray(testCase.assertions)))
+    .map((assertion) => ({ type: assertion.type, value: assertion.value }))
+    .filter((assertion) => assertion.type && assertion.value);
+
+  let providerConfig = judgeConfigForTarget(target);
+  if (!providerConfig) {
+    const evalProvider = asArray(evalConfig.providers)[0];
+    if (evalProvider?.baseUrl && evalProvider?.model) {
+      providerConfig = {
+        providerKey: evalProvider.providerKey,
+        adapter: evalProvider.engine || adapterForProvider(evalProvider.providerKey),
+        baseUrl: evalProvider.baseUrl,
+        model: evalProvider.model,
+        apiKeySecretId: evalProvider.apiKeySecretId,
+        temperature: 0.7,
+        maxTokens: 1024,
+        systemPrompt: 'You are a helpful assistant that writes evaluation criteria in strict JSON format, with no markdown fencing or commentary.',
+      };
+    }
+  }
+  if (!providerConfig) {
+    throw new Error('No generation provider available — configure a judge provider or an eval provider with a model first.');
+  }
+
+  const apiKey = await resolveProviderApiKey(target.id, providerConfig);
+  const numQuestions = Math.max(1, Math.min(15, Number(options.numAssertions) || 5));
+  const assertionType = ['llm-rubric', 'g-eval'].includes(options.type) ? options.type : 'llm-rubric';
+  const instructions = String(options.instructions || '').trim();
+
+  const result = await callProviderAdapter(providerConfig.adapter, {
+    ...providerConfig,
+    apiKey,
+    prompt: assertionQuestionsPrompt(prompts, existingAssertions, numQuestions, instructions),
+  });
+  let questions;
+  try {
+    const parsed = parseJsonCandidate(result.output);
+    questions = Array.isArray(parsed.questions) ? parsed.questions.filter((question) => question && question.question).slice(0, numQuestions) : [];
+  } catch (error) {
+    throw new Error(`Generation provider did not return valid JSON for assertions: ${error.message}`);
+  }
+  if (!questions.length) {
+    throw new Error('Generation provider did not return any evaluation questions.');
+  }
+
+  return questions.map((question) => ({
+    type: assertionType,
+    value: String(question.question),
+    label: question.label ? String(question.label).slice(0, 60) : undefined,
+  }));
+}
+
 async function evaluateAssertion(output, assertion = {}, context = {}) {
   const actual = String(output || '');
   const expected = String(assertion.value || '');
@@ -5512,6 +5588,22 @@ app.post('/api/targets/:id/stages/eval/generate-dataset', requireAuth, requireAd
   try {
     const testCases = await generateEvalDatasetForTarget(payload.target, req.body || {});
     res.json({ testCases });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Preview-only, same as generate-dataset above — the caller adds selected questions to
+// `redteam.defaultTest.assert` (this product's single shared config-level defaultTest, applied
+// to both eval and red-team runs) via the existing red_team config PATCH route.
+app.post('/api/targets/:id/stages/eval/generate-assertions', requireAuth, requireAdmin, async (req, res) => {
+  const payload = await fetchTarget(req.params.id);
+  if (!payload) {
+    return res.status(404).json({ error: 'Target not found' });
+  }
+  try {
+    const assertions = await generateEvalAssertionsForTarget(payload.target, req.body || {});
+    res.json({ assertions });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

@@ -23,6 +23,7 @@ import {
   getRunDetail,
   importEvalStageConfig,
   generateEvalDataset,
+  generateEvalAssertions,
   importTarget,
   login,
   logout,
@@ -2130,6 +2131,36 @@ function RedTeamWorkspace({
       ? redteam.defaultTest.assert
       : [],
   );
+  const [generateAssertionsCount, setGenerateAssertionsCount] = useState(5);
+  const [generateAssertionsType, setGenerateAssertionsType] = useState<'llm-rubric' | 'g-eval'>('llm-rubric');
+  const [generateAssertionsInstructions, setGenerateAssertionsInstructions] = useState('');
+  const [generateAssertionsPreview, setGenerateAssertionsPreview] = useState<Array<{ type: string; value: string; label?: string }>>([]);
+  const [generateAssertionsBusy, setGenerateAssertionsBusy] = useState(false);
+  const [generateAssertionsError, setGenerateAssertionsError] = useState('');
+
+  async function handleGenerateAssertions() {
+    if (isViewer) return;
+    setGenerateAssertionsError('');
+    setGenerateAssertionsBusy(true);
+    try {
+      const result = await generateEvalAssertions(token, detail.target.id, {
+        numAssertions: generateAssertionsCount,
+        type: generateAssertionsType,
+        instructions: generateAssertionsInstructions.trim() || undefined,
+      });
+      setGenerateAssertionsPreview(result.assertions);
+    } catch (err) {
+      setGenerateAssertionsError(err instanceof Error ? err.message : 'Unable to generate assertions');
+    } finally {
+      setGenerateAssertionsBusy(false);
+    }
+  }
+
+  function addGeneratedAssertionsToDefaults() {
+    setDefaultAssertRows((current) => [...current, ...generateAssertionsPreview.map(({ type, value }) => ({ type, value }))]);
+    setGenerateAssertionsPreview([]);
+    setMessage(`Added ${generateAssertionsPreview.length} generated assertion(s) to defaults — remember to save.`);
+  }
   const [entities, setEntities] = useState((redteam.entities || []).join(', '));
   const [dataClassification, setDataClassification] = useState(runtime.dataClassification || '');
   const [allowedTools, setAllowedTools] = useState((runtime.allowedTools || []).join(', '));
@@ -2418,6 +2449,61 @@ function RedTeamWorkspace({
           ) : (
             <p className="muted">No default assertions configured.</p>
           )}
+          <div className="field-help" style={{ marginTop: '1rem' }}>
+            Generate assertions with AI — writes objective evaluation questions for your eval's prompt(s), informed by whatever assertions already exist.
+          </div>
+          <div className="form-grid">
+            <div className="field">
+              <label>How many</label>
+              <input
+                type="number"
+                min={1}
+                max={15}
+                value={generateAssertionsCount}
+                onChange={(event) => setGenerateAssertionsCount(Number(event.target.value))}
+              />
+            </div>
+            <div className="field">
+              <label>Assertion type</label>
+              <select value={generateAssertionsType} onChange={(event) => setGenerateAssertionsType(event.target.value as 'llm-rubric' | 'g-eval')}>
+                <option value="llm-rubric">LLM rubric</option>
+                <option value="g-eval">G-Eval</option>
+              </select>
+            </div>
+            <div className="field span-2">
+              <label>Additional instructions (optional)</label>
+              <input
+                value={generateAssertionsInstructions}
+                onChange={(event) => setGenerateAssertionsInstructions(event.target.value)}
+                placeholder="e.g. focus on tone and formatting requirements"
+              />
+            </div>
+          </div>
+          <button className="secondary-button" type="button" disabled={isViewer || generateAssertionsBusy} title={viewerTitle} onClick={handleGenerateAssertions}>
+            {generateAssertionsBusy ? 'Generating...' : 'Generate preview'}
+          </button>
+          {generateAssertionsError ? <p className="error">{generateAssertionsError}</p> : null}
+          {generateAssertionsPreview.length ? (
+            <div className="generated-preview">
+              <p className="muted">{generateAssertionsPreview.length} generated assertion(s) — review, then add to defaults above and save.</p>
+              {generateAssertionsPreview.map((assertion, index) => (
+                <div className="prompt-row" key={`${assertion.value}-${index}`}>
+                  <strong>{assertion.label || `Assertion ${index + 1}`}</strong>
+                  <p className="muted">
+                    [{assertion.type}] {assertion.value}
+                  </p>
+                </div>
+              ))}
+              <div className="stage-actions">
+                <button className="primary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={addGeneratedAssertionsToDefaults}>
+                  Add all to defaults
+                </button>
+                <button className="ghost-button" type="button" onClick={() => setGenerateAssertionsPreview([])}>
+                  Discard
+                </button>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="subpanel">

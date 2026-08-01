@@ -352,6 +352,18 @@ export function generateEvalDataset(
   });
 }
 
+export function generateEvalAssertions(
+  token: string,
+  id: string,
+  payload: { numAssertions?: number; type?: 'llm-rubric' | 'g-eval'; instructions?: string },
+): Promise<{ assertions: Array<{ type: string; value: string; label?: string }> }> {
+  return request<{ assertions: Array<{ type: string; value: string; label?: string }> }>(
+    `/api/targets/${id}/stages/eval/generate-assertions`,
+    token,
+    { method: 'POST', body: JSON.stringify(payload) },
+  );
+}
+
 export function listEvalRuns(token: string, id: string): Promise<{ runs: EvalRun[] }> {
   return request<{ runs: EvalRun[] }>(`/api/targets/${id}/stages/eval/runs`, token);
 }
