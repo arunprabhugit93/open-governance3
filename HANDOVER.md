@@ -2157,3 +2157,48 @@ this loop, not an unlimited test double.
       untouched by re-fetching it afterward, then reran the target's
       real red-team stage to confirm zero regression (still 5/5 pass).
       This closes all five items from the external audit.
+
+## Change log — iteration 42 (`afterEach` extension hooks for eval runs — finished the UI wiring)
+
+60. The backend execution logic for promptfoo's `extensions` config
+    concept (`file://path/to/hook.js[:afterEach]` lifecycle hooks) had
+    already been added to `server.cjs` (`runAfterEachExtensionHooks`,
+    `parseExtensionRef`, wired into `executeEvalRun`'s row-building
+    loop) but was completely inert — nothing in the product ever
+    populated a target's `metadata.eval.extensions` field, so the
+    hook-running code path never executed for a real user.
+    - Added `extensions?: string[]` to the `EvalStageConfigPayload`
+      type (`api.ts`) and a matching "Extension hooks (one per line)"
+      textarea to the Eval workspace's Run options panel (`main.tsx`),
+      converting newline-separated lines to a string array on save —
+      the same pattern already used for bulk test-case import. No
+      backend route changes were needed: the `PATCH
+      .../stages/eval/config` route already spreads the whole request
+      body into eval metadata, so a populated `extensions` field
+      persists automatically once the frontend sends it.
+    - Verified live against the real E2E reference target (Groq-backed,
+      eval config captured before): wrote a real `.cjs` hook script
+      exporting `module.exports.afterEach`, PATCHed it into the
+      target's `extensions` field via the API (mirroring what the new
+      UI field now does), and ran a real eval. The live run's row came
+      back with `namedScores: { customLength: 5 }` and
+      `metadata: { extensionHookRan: true, hookName: "afterEach" }` —
+      both injected by the hook — while `pass`/`score` came only from
+      the real `contains` assertion (`pass: true`), confirming the
+      hook cannot override grading, matching promptfoo's own
+      `afterEach` mutation contract.
+    - Restoring the target's original config after the test surfaced a
+      real edge case in the eval-config PATCH route's merge semantics:
+      it shallow-merges the request body onto the *existing* stored
+      eval config rather than replacing it wholesale, so PATCHing with
+      a payload that simply omits `extensions` does not clear a
+      previously-set value — the field has to be explicitly sent as
+      `extensions: []` to reset it. Confirmed this is intentional
+      behavior (the same non-destructive-merge pattern this route uses
+      for every other field, e.g. `testCases`), not a bug, but it means
+      "restore from a snapshot taken before the field existed" requires
+      an explicit clear rather than a bare replay of that snapshot.
+      Cleared `extensions` back to `[]` and confirmed via a fresh GET
+      that the target's full eval config (providers, prompts, dataset
+      ID, test cases) exactly matches its pre-test state, then deleted
+      the scratch hook script.

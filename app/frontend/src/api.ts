@@ -158,6 +158,10 @@ export interface EvalStageConfigPayload {
     cache: boolean;
     timeoutMs: number;
   };
+  // promptfoo `afterEach` lifecycle hooks: `file:///path/to/hook.js[:afterEach]`, called after
+  // each row's assertions are graded. Can add namedScores/metadata to the row; cannot override
+  // pass/score (matches real promptfoo's own afterEach mutation contract).
+  extensions?: string[];
 }
 
 export interface RedTeamStageConfigPayload {

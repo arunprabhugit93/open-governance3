@@ -993,6 +993,7 @@ function EvalWorkspace({
       : [normalizeCaseForEditor({ name: 'Baseline utility test', input: 'Reply with exactly: READY', assertion: 'contains', expected: 'READY' })],
   );
   const [injectVar, setInjectVar] = useState(evalConfig.injectVar || 'prompt');
+  const [extensionsText, setExtensionsText] = useState((evalConfig.extensions || []).join('\n'));
   const [runOptions, setRunOptions] = useState<EvalStageConfigPayload['runOptions']>({
     engineMode: evalConfig.runOptions?.engineMode || 'direct',
     maxConcurrency: Number(evalConfig.runOptions?.maxConcurrency || 4),
@@ -1048,6 +1049,7 @@ function EvalWorkspace({
         : [normalizeCaseForEditor({ name: 'Baseline utility test', input: 'Reply with exactly: READY', assertion: 'contains', expected: 'READY' })],
     );
     setInjectVar(updatedEval.injectVar || 'prompt');
+    setExtensionsText((updatedEval.extensions || []).join('\n'));
     setRunOptions({
       engineMode: updatedEval.runOptions?.engineMode || 'direct',
       maxConcurrency: Number(updatedEval.runOptions?.maxConcurrency || 4),
@@ -1246,6 +1248,10 @@ function EvalWorkspace({
         promptTemplate: prompts[0]?.content || '{{prompt}}',
         injectVar,
         runOptions,
+        extensions: extensionsText
+          .split('\n')
+          .map((line: string) => line.trim())
+          .filter(Boolean),
       };
       const updated = await saveEvalStageConfig(token, detail.target.id, payload);
       const updatedMetadata = updated.target.metadata as Record<string, any>;
@@ -1917,6 +1923,18 @@ function EvalWorkspace({
               <input type="checkbox" checked={runOptions.cache} onChange={(event) => setRunOptions({ ...runOptions, cache: event.target.checked })} />
               Cache responses
             </label>
+          </div>
+          <div className="field">
+            <label>Extension hooks (one per line)</label>
+            <textarea
+              rows={2}
+              placeholder="file:///path/to/hook.js:afterEach"
+              value={extensionsText}
+              onChange={(event) => setExtensionsText(event.target.value)}
+            />
+            <p className="field-help">
+              Runs after each row is graded. A hook may add fields to <code>namedScores</code>/<code>metadata</code>, but cannot override the row's pass/fail or score.
+            </p>
           </div>
           <div className="stage-actions">
             <button className="secondary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={saveConfig}>
