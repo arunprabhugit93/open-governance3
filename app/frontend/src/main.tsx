@@ -1684,7 +1684,12 @@ function EvalWorkspace({
           <div className="subpanel-head">
             <div>
               <h3>Prompts</h3>
-              <p className="muted">Use variables like {'{{prompt}}'} or {'{{question}}'}.</p>
+              <p className="muted">
+                Use variables like {'{{prompt}}'} or {'{{question}}'}. For a scripted multi-turn conversation, write the prompt as a JSON array of{' '}
+                <code>{'{"role": "user"|"assistant"|"system", "content": "..."}'}</code> messages instead of plain text — variables still work
+                inside each message's <code>content</code>. The provider receives the full conversation; grading still looks at only the final
+                response.
+              </p>
             </div>
             <button className="secondary-button" type="button" onClick={() => setPrompts((current) => [...current, { name: `Prompt ${current.length + 1}`, content: '{{prompt}}' }])}>
               Add prompt
@@ -1701,13 +1706,34 @@ function EvalWorkspace({
                 <button
                   className="ghost-button"
                   type="button"
+                  onClick={() => {
+                    if (prompt.content.trim() && prompt.content.trim() !== '{{prompt}}' && !window.confirm('Replace this prompt with a multi-turn conversation template?')) {
+                      return;
+                    }
+                    const template = JSON.stringify(
+                      [
+                        { role: 'user', content: 'Hi, my name is {{name}}.' },
+                        { role: 'assistant', content: "Hello! Nice to meet you. How can I help you today?" },
+                        { role: 'user', content: '{{prompt}}' },
+                      ],
+                      null,
+                      2,
+                    );
+                    updatePrompt(index, { content: template });
+                  }}
+                >
+                  Insert multi-turn template
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
                   disabled={prompts.length === 1}
                   onClick={() => setPrompts((current) => current.filter((_prompt, i) => i !== index))}
                 >
                   Remove
                 </button>
               </div>
-              <textarea value={prompt.content} onChange={(event) => updatePrompt(index, { content: event.target.value })} />
+              <textarea value={prompt.content} onChange={(event) => updatePrompt(index, { content: event.target.value })} rows={prompt.content.trim().startsWith('[') ? 10 : undefined} />
             </div>
           ))}
         </section>

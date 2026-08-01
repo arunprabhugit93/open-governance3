@@ -2661,3 +2661,36 @@ this loop, not an unlimited test double.
       Flagging this explicitly rather than implying live coverage it
       doesn't have: a real Gemini/Cohere key would be needed to fully
       close this out.
+
+## Change log — iteration 52 (make multi-turn prompts discoverable in the UI)
+
+70. Iterations 50–51 shipped real multi-turn conversation support, but
+    nothing in the product told a user it existed — the Prompts
+    section's only hint was "Use variables like {{prompt}}", and a
+    JSON-array prompt would have worked by accident if someone
+    happened to try it, not by design. A backend capability nobody can
+    discover is barely a feature, so this is a direct instance of "make
+    the UI logical and user friendly," not a separate ask.
+    - Added explanatory help text to the Prompts section describing the
+      JSON-array `{role, content}` format and that `{{variables}}`
+      still work inside each message.
+    - Added an "Insert multi-turn template" button per prompt that
+      populates it with a real 3-turn example (scripted user/assistant
+      exchange + a final `{{prompt}}`-templated turn), confirming
+      first via `window.confirm` if the prompt already has non-default
+      content (same pattern used elsewhere for destructive actions).
+    - The prompt textarea now grows to 10 rows automatically once its
+      content looks like a JSON array, so a multi-turn script doesn't
+      render as an unreadable single-line scroll box.
+    - Verified live via real browser interaction end to end, not just
+      that it renders: logged in, opened the real Eval workspace,
+      clicked the real "Insert multi-turn template" button and
+      confirmed the textarea populated with valid JSON, set a real
+      `{"name": "Ava"}` test-case var via the existing "Additional vars
+      JSON" field, clicked the real "Save config" then "Run eval"
+      buttons, and confirmed via the actual run result that `{{name}}`
+      was correctly substituted to "Ava" inside the scripted first
+      turn and the real Groq API correctly complied with the final
+      turn's instruction. Restored the target's prompts/testCases to
+      their original state and confirmed a clean regression run
+      afterward.
