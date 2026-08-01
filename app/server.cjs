@@ -3670,6 +3670,71 @@ async function buildNativePromptfooConfig(target) {
   };
 }
 
+// Builds a config for the "Download YAML"/"Copy JSON" export endpoints specifically — NOT used
+// for internal execution (that stays on buildPromptfooConfig's raw shape, read directly by
+// executeEvalRun). The raw shape uses this product's own internal adapter IDs
+// (`openai-compatible`, `graphql`, ...) as a provider `id`, which real promptfoo's provider
+// registry doesn't recognize at all — confirmed the hard way by running the real installed
+// `promptfoo validate` CLI against this product's own un-fixed export, which failed outright
+// with "Could not identify provider: openai-compatible". Reuses the same
+// file://providers/native-target.cjs wrapper `buildNativePromptfooConfig` already uses
+// internally for native-engine-mode execution, but with two deliberate differences for an
+// export a user might download and inspect or share: (1) a relative `file://native-target.cjs`
+// path (portable if the recipient also has a copy of that file alongside the config, unlike an
+// absolute server-local path) instead of this server's absolute filesystem path, and (2) a
+// clearly-named placeholder env var reference instead of the real resolved secret — exporting
+// the actual API key value into a downloadable file would be a credential leak.
+async function buildPortableExportConfig(target) {
+  const config = buildPromptfooConfig(target);
+  const nativeAdapters = new Set([
+    'openai-compatible',
+    'azure-openai',
+    'anthropic',
+    'cohere',
+    'gemini',
+    'http-json',
+    'cli-provider',
+    'custom-script',
+    'graphql',
+    'websocket-chat',
+    'browser-chatbot',
+  ]);
+  const providers = (config.providers || []).map((provider, index) => {
+    const providerConfig = provider.config || {};
+    if (!nativeAdapters.has(provider.id)) {
+      // Leave unrecognized/unsupported adapters as-is rather than throwing — an export should
+      // degrade gracefully (still downloadable, still mostly useful) rather than fail outright
+      // the way live native-mode execution correctly does for an unsupported adapter.
+      return provider;
+    }
+    const envVarName = `OPENGOV_PROVIDER_${index}_API_KEY`;
+    return {
+      id: 'file://native-target.cjs',
+      label: provider.label,
+      config: {
+        adapter: provider.id,
+        providerKey: providerConfig.providerKey,
+        baseUrl: providerConfig.baseUrl,
+        model: providerConfig.model,
+        apiKey: `{{env.${envVarName}}}`,
+        temperature: providerConfig.temperature,
+        maxTokens: providerConfig.maxTokens,
+        systemPrompt: providerConfig.systemPrompt,
+        apiVersion: providerConfig.apiVersion,
+        libraryConfig: providerConfig.libraryConfig,
+      },
+    };
+  });
+  return {
+    ...config,
+    providers,
+    tests: (config.tests || []).map((test) => ({
+      ...test,
+      assert: (test.assert || []).map(nativeAssertion),
+    })),
+  };
+}
+
 function runPromptfooCli(args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(process.cwd(), 'node_modules', 'promptfoo', 'dist', 'src', 'entrypoint.js'), ...args], {
@@ -5282,6 +5347,16 @@ function toYaml(value, indent = 0) {
   }
   if (value && typeof value === 'object') {
     return Object.entries(value)
+      // Real promptfoo's own config schema uses Zod `.optional()` (expects the key genuinely
+      // absent) rather than `.nullable()` for most fields — emitting `key: null` for every
+      // unset field, which this used to do unconditionally, fails validation against the real
+      // installed promptfoo CLI (confirmed via `promptfoo validate` on this product's own
+      // exported config: rejected `redteam.language`/`redteam.maxCharsPerMessage`/several
+      // `tests[].assert[]` fields for being `null` instead of absent). Skipping null/undefined
+      // keys entirely is strictly more schema-compliant and changes nothing for any consumer
+      // that already treated a missing key the same as an explicit null (every internal reader
+      // in this codebase uses `??`/`||` fallbacks, never a strict `=== null` check).
+      .filter(([, item]) => item !== null && item !== undefined)
       .map(([key, item]) => {
         // An empty array must be emitted inline (`key: []`) — nesting it on the next line
         // (the general array-field branch below) produces `key:\n[]`, where the `[]` sits at
@@ -6522,9 +6597,10 @@ app.get('/api/targets/:id/export/:format', requireAuth, async (req, res) => {
   const format = req.params.format;
   const safeName = payload.target.displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'target';
   if (format === 'yaml') {
+    const portable = await buildPortableExportConfig(payload.target);
     res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}-engine-config.yaml"`);
-    return res.send(payload.promptfooConfigYaml);
+    return res.send(toYaml(portable));
   }
   if (format === 'csv') {
     const runs = await pool.query(
@@ -6558,16 +6634,21 @@ app.get('/api/targets/:id/export', requireAuth, async (req, res) => {
   if (!payload) {
     return res.status(404).json({ error: 'Target not found' });
   }
-  const [datasets, schedules, runs] = await Promise.all([
+  const [datasets, schedules, runs, portable] = await Promise.all([
     pool.query('select * from target_datasets where target_id = $1 order by created_at asc', [req.params.id]),
     pool.query('select * from target_schedules where target_id = $1 order by created_at asc', [req.params.id]),
     pool.query('select * from target_stage_runs where target_id = $1 order by created_at desc limit 100', [req.params.id]),
+    buildPortableExportConfig(payload.target),
   ]);
   res.json({
     target: payload.target,
     readiness: payload.readiness,
-    engineConfig: payload.promptfooConfig,
-    engineConfigYaml: payload.promptfooConfigYaml,
+    engineConfig: portable,
+    engineConfigYaml: toYaml(portable),
+    // Any provider using an OpenGovernance-only adapter needs `providers/native-target.cjs`
+    // (from this deployment) alongside the exported config, plus one `OPENGOV_PROVIDER_<i>_API_KEY`
+    // env var per provider set to that provider's real key — the export deliberately never
+    // includes the actual secret value.
     datasets: datasets.rows.map(rowToDataset),
     schedules: schedules.rows.map(rowToSchedule),
     runs: runs.rows.map(rowToRun),

@@ -3029,3 +3029,75 @@ this loop, not an unlimited test double.
       spawning a spurious third row. Confirmed the target's stored
       config was untouched throughout (bulk import is local-only until
       an explicit save) — no restore needed.
+
+## Change log — iteration 61 (make exported configs actually runnable by real promptfoo)
+
+79. Ran a genuine external interop check that hadn't been done all
+    session: fed this product's own "Download YAML" export straight
+    into the REAL installed `promptfoo validate` CLI. It rejected the
+    config outright — `Could not identify provider: openai-compatible`
+    plus several schema errors on `null` fields. A user who downloaded
+    a config to share with a colleague, archive, or run independently
+    would hit an error immediately; this had apparently never been
+    checked against the real CLI before.
+    - **Root cause 1 (broad)**: this product's hand-rolled `toYaml()`
+      serializer emitted `key: null` for every unset field
+      unconditionally. Real promptfoo's schema uses Zod `.optional()`
+      (expects the key genuinely absent) rather than `.nullable()` for
+      most fields, so an explicit `null` fails validation. Fixed by
+      skipping null/undefined object keys in `toYaml()` entirely —
+      strictly more schema-compliant, and safe for every existing
+      consumer since nothing in this codebase distinguishes "key
+      missing" from "key is null" (`??`/`||` fallbacks throughout).
+      This alone resolved 3 of the 4 validation errors.
+    - **Root cause 2 (export-specific)**: the exported provider block
+      used this product's own internal adapter id (`openai-compatible`)
+      directly as the provider `id` — not a real promptfoo provider ID
+      at all. `executeNativeEvalRun` already solves this correctly for
+      internal native-mode execution (`buildNativePromptfooConfig`
+      wraps providers as `file://.../providers/native-target.cjs` with
+      the real adapter nested inside `config.adapter`), but the export
+      endpoints never got the same treatment — they used the raw
+      internal shape straight from `buildPromptfooConfig`.
+    - Added `buildPortableExportConfig()`, reusing the same wrapper
+      shape but with two deliberate export-specific differences: a
+      relative `file://native-target.cjs` path (works if the recipient
+      places a copy of that file alongside the config; an absolute
+      server-local path, which `buildNativePromptfooConfig` correctly
+      uses for its own internal purposes, would never resolve on a
+      different machine) instead of this server's absolute filesystem
+      path, and a clearly-named placeholder env var reference
+      (`{{env.OPENGOV_PROVIDER_<i>_API_KEY}}`) instead of the real
+      resolved secret — embedding the actual API key into a
+      downloadable file would be a credential leak. Wired into both
+      export routes (`/export/:format=yaml` and the full `/export`
+      JSON payload used by "Copy JSON"). Left the `fetchTarget()`
+      response's own `promptfooConfig`/`promptfooConfigYaml` (used for
+      the in-app "Engine config preview" panel) on the original
+      internal shape deliberately — it's a debugging aid reflecting
+      this product's own execution model, not something a user takes
+      out of the product, and recomputing it with async secret
+      resolution on every target-detail-page load would add real
+      latency to a very hot path for no benefit.
+    - Verified with real, escalating external interop tests: (1) ran
+      the real `promptfoo validate` CLI against the null-fix-only
+      export — 3 of 4 errors gone, only the provider-ID error
+      remained; (2) downloaded the real export via the actual
+      `/export/yaml` endpoint, copied this deployment's real
+      `providers/native-target.cjs` alongside it (the realistic
+      "user downloads both files" scenario), and ran `promptfoo
+      validate` again from a location where `native-target.cjs`'s own
+      `require('dotenv')` could actually resolve (proving the earlier
+      "Cannot find module 'dotenv'" failure was an artifact of an
+      isolated test directory with no `node_modules`, not a product
+      bug) — got back exactly `Configuration is valid.` from the real
+      CLI. Did not additionally run a full `promptfoo eval` with this
+      config, since that would require extracting this deployment's
+      real Groq secret to hand to an external process; `validate`
+      already deeply resolves and instantiates the provider class
+      (that's specifically why it caught the original bug), which is
+      sufficient, real proof without that exposure. Confirmed zero
+      regression on both direct-mode and native-mode eval execution
+      afterward (both of which also flow through the now-changed
+      `toYaml()`), and cleaned up all test artifacts (temp config
+      files, scratch directories) afterward.
