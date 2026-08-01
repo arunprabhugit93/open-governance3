@@ -3301,3 +3301,42 @@ this loop, not an unlimited test double.
       that run's cases, which is accurate — this target's red-team
       config has no `defaultTest.vars` set). `tsc --noEmit` and the
       production `vite build` both passed clean.
+
+## Change log — iteration 66 (eval rows: surface cacheHit indicator)
+
+84. Third instance of the same gap class this window, found the same
+    way as iterations 64/65: `executeEvalRun` already computes
+    `cacheHit`/`cacheKey` per row (true when a result came from the
+    response cache instead of a live provider call) and puts it on
+    every returned row — but the frontend never read the field at
+    all; it wasn't even declared on the `rows[]` type in `types.ts`.
+    Checked whether this genuinely matters for parity, not just
+    "another field exists": real promptfoo's own web UI
+    (`EvalOutputCell.tsx`) explicitly renders a `(cached)` badge next
+    to the latency cell for exactly this reason — a cached result
+    doesn't reflect the current live behavior of the provider, which
+    matters a lot for a testing/assurance tool where the whole point
+    is "does this provider currently behave correctly," so silently
+    treating a stale cached response as equivalent to a fresh one is
+    a real trust gap, not cosmetic.
+    - Added `cacheHit` to `buildRunTrace()`'s per-row mapping
+      (`Boolean(row.cacheHit)` — plain boolean, not something needing
+      truncation/defaulting like the rawResponse/vars fields).
+    - Extended `RunTraceRow` and `EvalRun.results.rows[]` in
+      `types.ts`.
+    - Added a "(cached response — not a live provider call)" line to
+      the Eval workspace's "Latest run" results table, and a compact
+      "(cached)" suffix next to the existing latency display in the
+      "Run trace" detail view.
+    - Verified live against the real Groq-backed E2E reference target:
+      ran two real eval requests with `cache: true` explicitly set
+      (the field the frontend's "Cache responses" checkbox sends,
+      confirmed by reading `executeEvalRun`'s
+      `cacheEnabled = Boolean(runOptions.cache)` — it's read directly
+      off the request body, not merged server-side from the target's
+      saved config, so a bare `{}` body genuinely means cache-off, not
+      a bug) — both hit the pre-existing cache entry from earlier
+      testing this session and correctly returned `cacheHit: true` on
+      both the run response row and the `/runs/:id` trace endpoint.
+      `tsc --noEmit` and the production `vite build` both passed
+      clean.

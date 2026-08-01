@@ -585,6 +585,7 @@ function buildRunTrace(run) {
     finishReason: row.finishReason || null,
     rawResponse: row.rawResponse ?? null,
     vars: row.vars || {},
+    cacheHit: Boolean(row.cacheHit),
   }));
 }
 

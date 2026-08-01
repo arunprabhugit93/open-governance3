@@ -2337,6 +2337,7 @@ function EvalWorkspace({
                 <strong>{row.test}</strong>
                 <p>{row.output || row.error}</p>
                 {row.finishReason ? <p className="muted">Finish reason: {row.finishReason}</p> : null}
+                {row.cacheHit ? <p className="muted">(cached response — not a live provider call)</p> : null}
                 {row.vars && Object.keys(row.vars).length ? (
                   <details>
                     <summary>View variables</summary>
@@ -3904,7 +3905,10 @@ function EvidenceWorkspace({
                 <div className="trace-head">
                   <span className={row.pass ? 'result-pass' : 'result-fail'}>{row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}</span>
                   <strong>{row.test}</strong>
-                  <span className="muted">{row.latencyMs ? `${row.latencyMs} ms` : ''}</span>
+                  <span className="muted">
+                    {row.latencyMs ? `${row.latencyMs} ms` : ''}
+                    {row.cacheHit ? ' (cached)' : ''}
+                  </span>
                 </div>
                 <dl className="definition-list">
                   <dt>Prompt</dt>

@@ -140,6 +140,7 @@ export interface EvalRun {
       finishReason?: string | null;
       rawResponse?: unknown;
       vars?: Record<string, unknown>;
+      cacheHit?: boolean;
     }>;
   };
   error: string | null;
@@ -247,6 +248,7 @@ export interface RunTraceRow {
   finishReason: string | null;
   rawResponse: unknown;
   vars: Record<string, unknown>;
+  cacheHit: boolean;
 }
 
 export interface TargetReport {
