@@ -2136,12 +2136,14 @@ function EvalWorkspace({
             <label>Extension hooks (one per line)</label>
             <textarea
               rows={2}
-              placeholder="file:///path/to/hook.js:afterEach"
+              placeholder="file:///path/to/hook.js:beforeEach"
               value={extensionsText}
               onChange={(event) => setExtensionsText(event.target.value)}
             />
             <p className="field-help">
-              Runs after each row is graded. A hook may add fields to <code>namedScores</code>/<code>metadata</code>, but cannot override the row's pass/fail or score.
+              <code>:beforeEach</code> runs before the provider is called and may change a test's <code>vars</code>/<code>assert</code>/description.{' '}
+              <code>:afterEach</code> runs after grading and may add fields to <code>namedScores</code>/<code>metadata</code>, but cannot override pass/fail or
+              score. Omit the suffix to run a script for both hooks — it only needs to export the ones it implements.
             </p>
           </div>
           <div className="stage-actions">

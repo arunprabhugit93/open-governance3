@@ -2467,3 +2467,57 @@ this loop, not an unlimited test double.
       was never clicked — no restore needed.
     - This closes all three of real promptfoo's `generate dataset` /
       `generate assertions` / `optimize` commands for this product.
+
+## Change log — iteration 48 (`beforeEach` extension hook + a latent afterEach bug)
+
+66. Real promptfoo's `extensions` concept has four lifecycle hooks
+    (`beforeAll`/`beforeEach`/`afterEach`/`afterAll`); this product only
+    implemented `afterEach` (iteration 42). `beforeEach` is the natural
+    complement — it runs before the prompt is rendered and the provider
+    is called, and can mutate the test's `vars`/`assert`/description
+    (e.g. to inject dynamic context) — genuinely useful and much
+    simpler to implement faithfully than `beforeAll` (which needs to
+    rewrite prompt functions across the whole suite) or `afterAll`
+    (fires after persistence, for side effects only — no execution
+    value). Left those two as open gaps rather than half-implementing
+    them.
+    - Added `runBeforeEachExtensionHooks()` to `server.cjs`, parallel
+      in structure to the existing `runAfterEachExtensionHooks`. Wired
+      into `executeEvalRun`'s per-task loop, right before the cache key
+      is computed: if it mutates `vars`, the prompt is re-rendered from
+      the original template (`applyTemplate(task.promptTemplate, ...)`)
+      so the mutation actually reaches the real provider call, not just
+      the row's displayed prompt.
+    - **Found and fixed a real latent bug while implementing this**:
+      `runAfterEachExtensionHooks` unconditionally threw when a
+      generic/no-suffix extension reference (`file://hook.js`, real
+      promptfoo's "run this script for every hook it implements"
+      pattern) didn't export an `afterEach` function — meaning any
+      extension script that implements ONLY `beforeEach` (a completely
+      valid, real promptfoo-supported case) would crash every eval row
+      the moment it got referenced generically. Real promptfoo's own
+      dispatcher (`evaluatorHelpers.ts:runExtensionHook`) tolerates a
+      script implementing only some of the four hooks — only an
+      extension EXPLICITLY targeting a hook by suffix
+      (`file://hook.js:afterEach`) is required to implement it. Fixed
+      by skipping (not throwing) when the reference is generic and the
+      hook isn't implemented; explicit-suffix references still throw as
+      before, since that's a real misconfiguration.
+    - Updated the Eval workspace's extension-hooks field help text to
+      document both hooks and the generic-vs-explicit-suffix behavior.
+    - Verified live and rigorously, both fixes together: (1) wrote a
+      real `.cjs` hook exporting `beforeEach` (explicit `:beforeEach`
+      suffix), which rewrites `vars.prompt` from "Reply with exactly:
+      READY" to "Reply with exactly: MUTATED"; ran a real eval against
+      the E2E Groq target and confirmed the row's `prompt` field showed
+      the mutated text, the model's real output was literally
+      "MUTATED", and the original `contains: READY` assertion correctly
+      failed — proving the mutation reached the actual API call, not
+      just decoration on the result; (2) wrote a second hook exporting
+      ONLY `afterEach`, referenced generically (no suffix, so both
+      hooks get probed against it), and confirmed a real eval run
+      neither threw nor errored despite `beforeEach` being unimplemented
+      on that script, while the implemented `afterEach` still correctly
+      added `namedScores.tolerance_test: 1` to the row. Restored the
+      target's `extensions` field to `[]` afterward and deleted both
+      scratch hook scripts.

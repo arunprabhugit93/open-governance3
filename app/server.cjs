@@ -3292,14 +3292,21 @@ async function runAfterEachExtensionHooks(extensions, test, result) {
     } catch (error) {
       throw new Error(`Extension hook failed to load (${extension}): ${error.message}`);
     }
+    const explicitlyTargeted = ref.functionName === 'afterEach';
     const fn =
-      ref.functionName && ref.functionName !== 'afterEach'
+      ref.functionName && !explicitlyTargeted
         ? loaded?.[ref.functionName]
         : typeof loaded === 'function'
           ? loaded
           : loaded?.afterEach;
     if (typeof fn !== 'function') {
-      throw new Error(`Extension hook (${extension}) does not export a callable afterEach function`);
+      // Only an extension explicitly targeting `:afterEach` is required to implement it — a
+      // generic/no-suffix reference (real promptfoo's "run for every hook" pattern) may point
+      // at a script that only implements beforeEach, so skip rather than error in that case.
+      if (explicitlyTargeted) {
+        throw new Error(`Extension hook (${extension}) does not export a callable afterEach function`);
+      }
+      continue;
     }
     const context = { test, result: { ...current, namedScores: { ...(current.namedScores || {}) }, metadata: { ...(current.metadata || {}) } } };
     const useNewConvention = ref.functionName === 'afterEach';
@@ -3313,6 +3320,55 @@ async function runAfterEachExtensionHooks(extensions, test, result) {
         ...current,
         namedScores: { ...(current.namedScores || {}), ...(returnedResult.namedScores || {}) },
         metadata: { ...(current.metadata || {}), ...(returnedResult.metadata || {}) },
+      };
+    }
+  }
+  return current;
+}
+
+// Complement to runAfterEachExtensionHooks above: runs before a test's prompt is rendered and
+// the provider is called, letting a hook mutate the test's vars/assertions/description (e.g. to
+// inject dynamic context) — real promptfoo's `BeforeEachExtensionHookContext` contract makes the
+// whole `test` object mutable; this narrows to the fields this engine actually reads downstream.
+async function runBeforeEachExtensionHooks(extensions, test) {
+  const list = Array.isArray(extensions) ? extensions.filter(Boolean) : [];
+  if (!list.length) return test;
+  let current = test;
+  for (const extension of list) {
+    const ref = parseExtensionRef(extension);
+    if (!ref) continue;
+    const knownHooks = new Set(['beforeAll', 'beforeEach', 'afterEach', 'afterAll']);
+    if (ref.functionName && knownHooks.has(ref.functionName) && ref.functionName !== 'beforeEach') continue;
+    const resolvedPath = path.isAbsolute(ref.scriptPath) ? ref.scriptPath : path.resolve(process.cwd(), ref.scriptPath);
+    let loaded;
+    try {
+      loaded = await loadProviderScript(resolvedPath);
+    } catch (error) {
+      throw new Error(`Extension hook failed to load (${extension}): ${error.message}`);
+    }
+    const explicitlyTargeted = ref.functionName === 'beforeEach';
+    const fn =
+      ref.functionName && !explicitlyTargeted
+        ? loaded?.[ref.functionName]
+        : typeof loaded === 'function'
+          ? loaded
+          : loaded?.beforeEach;
+    if (typeof fn !== 'function') {
+      if (explicitlyTargeted) {
+        throw new Error(`Extension hook (${extension}) does not export a callable beforeEach function`);
+      }
+      continue;
+    }
+    const context = { test: { ...current, vars: { ...(current.vars || {}) }, assert: Array.isArray(current.assert) ? [...current.assert] : [] } };
+    const useNewConvention = explicitlyTargeted;
+    const returned = useNewConvention ? await fn(context, { hookName: 'beforeEach' }) : await fn('beforeEach', context);
+    const returnedTest = returned?.test;
+    if (returnedTest && typeof returnedTest === 'object') {
+      current = {
+        ...current,
+        vars: returnedTest.vars && typeof returnedTest.vars === 'object' ? returnedTest.vars : current.vars,
+        assert: Array.isArray(returnedTest.assert) ? returnedTest.assert : current.assert,
+        description: returnedTest.description !== undefined ? returnedTest.description : current.description,
       };
     }
   }
@@ -3611,6 +3667,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
             testIndex,
             repeatIndex,
             test,
+            promptTemplate,
             vars,
             prompt,
             assertions,
@@ -3631,6 +3688,37 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
       return null;
     }
     const started = Date.now();
+    if (extensions.length) {
+      try {
+        const mutatedTest = await runBeforeEachExtensionHooks(extensions, {
+          description: task.test.description,
+          vars: task.vars,
+          assert: task.assertions,
+        });
+        // Mutating this task object directly is safe — each task is a distinct object built
+        // fresh in the outer loop, not shared/reused across concurrent mapLimit invocations.
+        task.vars = mutatedTest.vars;
+        task.assertions = mutatedTest.assert;
+        task.prompt = applyTemplate(task.promptTemplate, mutatedTest.vars);
+      } catch (error) {
+        return {
+          providerIndex: task.providerIndex,
+          promptIndex: task.promptIndex,
+          testIndex: task.testIndex,
+          repeatIndex: task.repeatIndex,
+          provider: task.provider.label,
+          test: task.test.description,
+          prompt: task.prompt,
+          output: '',
+          assertions: task.assertions,
+          pass: false,
+          error: `beforeEach extension hook failed: ${error.message}`,
+          cacheHit: false,
+          cacheKey: '',
+          latencyMs: Date.now() - started,
+        };
+      }
+    }
     const cacheKey = outputCacheKey({
       target,
       provider: task.provider,
