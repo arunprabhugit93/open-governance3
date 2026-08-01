@@ -5372,6 +5372,15 @@ function toYaml(value, indent = 0) {
         if (Array.isArray(item)) {
           return `${pad}${key}:\n${toYaml(item, indent + 2)}`;
         }
+        // Same malformed-nesting bug as the empty-array case above, for objects: an empty
+        // object recurses to an empty string, leaving `key:` with literally nothing after it —
+        // valid YAML, but parses back as `key: null`, not `key: {}`. Harmless by luck so far
+        // (the one place this showed up, `redteam.defaultTest.vars`, happened to still pass
+        // real promptfoo's schema validation with a null there), but not something to keep
+        // relying on — an empty object should render as what it is.
+        if (item && typeof item === 'object' && !Object.keys(item).length) {
+          return `${pad}${key}: {}`;
+        }
         if (item && typeof item === 'object') {
           return `${pad}${key}:\n${toYaml(item, indent + 2)}`;
         }

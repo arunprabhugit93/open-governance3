@@ -3101,3 +3101,37 @@ this loop, not an unlimited test double.
       afterward (both of which also flow through the now-changed
       `toYaml()`), and cleaned up all test artifacts (temp config
       files, scratch directories) afterward.
+
+## Change log — iteration 62 (empty-object YAML rendering — the other half of iteration 37's fix)
+
+80. Noticed while re-reading the exported config's output during
+    iteration 61's verification: `redteam.defaultTest.vars` (an empty
+    object, `{}`) rendered as a bare `vars:` with literally nothing
+    after it — valid YAML syntax, but it parses back as `vars: null`,
+    not `vars: {}`. This is the exact same malformed-nesting bug class
+    iteration 37 fixed for empty ARRAYS (`toYaml`'s array branch
+    special-cases `[]` to render inline, specifically because nesting
+    it on the next line produces something real YAML parsers reject)
+    — but the analogous case for empty OBJECTS was never added, since
+    an empty object recurses to an empty string the same way an empty
+    array does, leaving `key:` with nothing indented underneath it.
+    - Unlike the array case, this hadn't actually broken anything yet
+      — iteration 61's real `promptfoo validate` run passed clean with
+      this exact rendering in place, meaning real promptfoo's schema
+      happens to tolerate `null` for `defaultTest.vars` specifically.
+      But "happens to work by luck" isn't the same as "is correct",
+      and the next field that hits this same empty-object path might
+      not be so forgiving — fixed on general principle rather than
+      waiting for it to actually break something.
+    - Added the same inline special case the array branch already had:
+      an empty object now renders as `key: {}`.
+    - Verified live: re-fetched the real export, confirmed
+      `defaultTest.vars` now reads `vars: {}` explicitly instead of a
+      bare `vars:`; re-ran the exact same real `promptfoo validate`
+      check from iteration 61 (same file-placement setup) and got the
+      same clean `Configuration is valid.`; then ran real eval
+      executions on both direct-mode and native-mode, plus a real
+      red-team run (the stage that actually owns `defaultTest`), and
+      confirmed all three matched their known-consistent prior results
+      exactly — zero regression from either `toYaml` change this
+      session.
