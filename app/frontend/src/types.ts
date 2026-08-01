@@ -122,6 +122,8 @@ export interface EvalRun {
       fail: number;
       error: number;
       passRate: number;
+      namedScores?: Record<string, number>;
+      derivedMetrics?: Record<string, number | null>;
     };
     rows?: Array<{
       provider: string;
@@ -134,6 +136,7 @@ export interface EvalRun {
       repeatIndex?: number;
       assertions?: Array<Record<string, unknown>>;
       tokenUsage?: Record<string, unknown> | null;
+      namedScores?: Record<string, number>;
     }>;
   };
   error: string | null;

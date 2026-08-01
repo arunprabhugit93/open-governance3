@@ -2521,3 +2521,61 @@ this loop, not an unlimited test double.
       added `namedScores.tolerance_test: 1` to the row. Restored the
       target's `extensions` field to `[]` afterward and deleted both
       scratch hook scripts.
+
+## Change log — iteration 49 (`derivedMetrics` — custom composite metrics)
+
+67. Real promptfoo config supports a top-level `derivedMetrics` array:
+    named `mathjs` expressions evaluated against a run's aggregate
+    named scores to compute a custom composite metric (the canonical
+    example is F1 from precision/recall averages —
+    `evaluator.ts:updateDerivedMetrics`). This product had ZERO
+    named-score aggregation at the summary level and no derivedMetrics
+    support at all — `namedScores` only ever existed per-row (via
+    iteration 42's `afterEach` hooks), never rolled up.
+    - `mathjs` turned out to already be present in `node_modules` —
+      but only as an incidental transitive dependency of the vendored
+      `promptfoo` package, not something this product's own
+      `package.json` declared. Added it as an explicit direct
+      dependency (`^15.2.0`, matching the already-installed version)
+      so it can't silently disappear on a future `promptfoo` version
+      bump that drops or changes its own mathjs dependency.
+    - `aggregateNamedScores(rows)`: unweighted average per named score
+      across rows that reported it. Deliberately simpler than real
+      promptfoo's own weighted accumulator (`util/namedMetrics.ts`,
+      which weights by assertion count / explicit
+      `namedScoreWeights`) — an honest simplification, not a silent
+      behavior gap, and documented as such in the code.
+    - `computeDerivedMetrics(namedScores, derivedMetrics, rowCount)`:
+      evaluates each formula via `math.evaluate()` against the
+      aggregated scores plus `__count` (row count), threading each
+      metric's own result into the context for metrics listed after
+      it — same behavior as real promptfoo.
+    - Wired into `executeEvalRun`'s summary construction and into
+      `summarizeRows()` (used by native-mode/rerun/schedule summary
+      paths too), so `namedScores` now appears on every eval run
+      summary, with `derivedMetrics` added only when the target has
+      any configured.
+    - Frontend: `derivedMetrics?: Array<{name, value}>` added to
+      `EvalStageConfigPayload` (persists automatically — the eval
+      config PATCH route already spreads the whole body). New
+      "Derived metrics" editor in the Eval workspace's Run options
+      section, and both `namedScores` (averages) and `derivedMetrics`
+      results now render in the "Latest run" summary.
+    - Verified live and precisely, not just plausibility-checked: used
+      a real `afterEach` hook (iteration 42's mechanism) to seed two
+      test cases with different `precision`/`recall` named scores
+      (0.8/0.6 and 0.6/0.9) against the real E2E Groq target, defined
+      an `f1 = (2*precision*recall)/(precision+recall)` derived metric,
+      ran a real eval, and confirmed the exact expected arithmetic:
+      `namedScores: {precision: 0.7, recall: 0.75}` (the correct
+      averages) and `derivedMetrics: {f1: 0.7241379310344827}` (the
+      exact mathematically correct F1 value for those averages, not
+      just "some number"). Also confirmed a clean run with no
+      `derivedMetrics` configured shows an empty `namedScores: {}` and
+      omits `derivedMetrics` entirely — no regression on the common
+      case. Restored the target's `extensions`, `derivedMetrics`, and
+      `testCases` to their original state afterward (and, per iteration
+      44's earlier finding, had to explicitly PATCH
+      `derivedMetrics: []` — the field's absence from the pre-test
+      snapshot doesn't clear it via this route's non-destructive
+      merge).

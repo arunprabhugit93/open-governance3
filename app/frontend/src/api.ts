@@ -162,6 +162,9 @@ export interface EvalStageConfigPayload {
   // each row's assertions are graded. Can add namedScores/metadata to the row; cannot override
   // pass/score (matches real promptfoo's own afterEach mutation contract).
   extensions?: string[];
+  // promptfoo top-level `derivedMetrics`: named mathjs expressions evaluated against the run's
+  // aggregate namedScores (e.g. { name: 'f1', value: '(2*precision*recall)/(precision+recall)' }).
+  derivedMetrics?: Array<{ name: string; value: string }>;
 }
 
 export interface RedTeamStageConfigPayload {

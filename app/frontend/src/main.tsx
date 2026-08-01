@@ -998,6 +998,9 @@ function EvalWorkspace({
   );
   const [injectVar, setInjectVar] = useState(evalConfig.injectVar || 'prompt');
   const [extensionsText, setExtensionsText] = useState((evalConfig.extensions || []).join('\n'));
+  const [derivedMetricRows, setDerivedMetricRows] = useState<Array<{ name: string; value: string }>>(
+    Array.isArray(evalConfig.derivedMetrics) && evalConfig.derivedMetrics.length ? evalConfig.derivedMetrics : [],
+  );
   const [runOptions, setRunOptions] = useState<EvalStageConfigPayload['runOptions']>({
     engineMode: evalConfig.runOptions?.engineMode || 'direct',
     maxConcurrency: Number(evalConfig.runOptions?.maxConcurrency || 4),
@@ -1067,6 +1070,7 @@ function EvalWorkspace({
     );
     setInjectVar(updatedEval.injectVar || 'prompt');
     setExtensionsText((updatedEval.extensions || []).join('\n'));
+    setDerivedMetricRows(Array.isArray(updatedEval.derivedMetrics) && updatedEval.derivedMetrics.length ? updatedEval.derivedMetrics : []);
     setRunOptions({
       engineMode: updatedEval.runOptions?.engineMode || 'direct',
       maxConcurrency: Number(updatedEval.runOptions?.maxConcurrency || 4),
@@ -1319,6 +1323,7 @@ function EvalWorkspace({
           .split('\n')
           .map((line: string) => line.trim())
           .filter(Boolean),
+        derivedMetrics: derivedMetricRows.filter((row) => row.name.trim() && row.value.trim()),
       };
       const updated = await saveEvalStageConfig(token, detail.target.id, payload);
       const updatedMetadata = updated.target.metadata as Record<string, any>;
@@ -2146,6 +2151,44 @@ function EvalWorkspace({
               score. Omit the suffix to run a script for both hooks — it only needs to export the ones it implements.
             </p>
           </div>
+          <div className="field">
+            <div className="subpanel-head">
+              <label>Derived metrics</label>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setDerivedMetricRows((current) => [...current, { name: '', value: '' }])}
+              >
+                Add derived metric
+              </button>
+            </div>
+            <p className="field-help">
+              A named formula evaluated against this run's aggregate named scores (averaged across rows), using{' '}
+              <code>__count</code> for row count — e.g. <code>f1</code> = <code>(2*precision*recall)/(precision+recall)</code>. Each metric's own
+              result is available to metrics listed after it.
+            </p>
+            {derivedMetricRows.map((row, index) => (
+              <div className="assertion-row" key={index}>
+                <input
+                  value={row.name}
+                  placeholder="metric name (e.g. f1)"
+                  onChange={(event) =>
+                    setDerivedMetricRows((current) => current.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)))
+                  }
+                />
+                <input
+                  value={row.value}
+                  placeholder="formula (e.g. (2*precision*recall)/(precision+recall))"
+                  onChange={(event) =>
+                    setDerivedMetricRows((current) => current.map((item, i) => (i === index ? { ...item, value: event.target.value } : item)))
+                  }
+                />
+                <button className="ghost-button" type="button" onClick={() => setDerivedMetricRows((current) => current.filter((_row, i) => i !== index))}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
           <div className="stage-actions">
             <button className="secondary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={saveConfig}>
               Save config
@@ -2172,10 +2215,26 @@ function EvalWorkspace({
               <div><span>Pass</span><strong>{latestRun.results.summary.pass}</strong></div>
               <div><span>Fail</span><strong>{latestRun.results.summary.fail}</strong></div>
               <div><span>Error</span><strong>{latestRun.results.summary.error}</strong></div>
+              {latestRun.results.summary.derivedMetrics && Object.keys(latestRun.results.summary.derivedMetrics).length
+                ? Object.entries(latestRun.results.summary.derivedMetrics).map(([name, value]) => (
+                    <div key={name}>
+                      <span>{name}</span>
+                      <strong>{value === null ? 'error' : Number(value).toFixed(3)}</strong>
+                    </div>
+                  ))
+                : null}
             </div>
           ) : (
             <p className="muted">No runs yet.</p>
           )}
+          {latestRun?.results?.summary?.namedScores && Object.keys(latestRun.results.summary.namedScores).length ? (
+            <p className="muted">
+              Named scores (avg):{' '}
+              {Object.entries(latestRun.results.summary.namedScores)
+                .map(([name, value]) => `${name}=${Number(value).toFixed(3)}`)
+                .join(', ')}
+            </p>
+          ) : null}
           <div className="results-table">
             {(latestRun?.results?.rows || []).map((row, index) => (
               <div className="result-row" key={`${row.provider}-${row.test}-${index}`}>

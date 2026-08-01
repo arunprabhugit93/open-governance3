@@ -11,6 +11,7 @@ const express = require('express');
 const yaml = require('js-yaml');
 const WebSocket = require('ws');
 const { Pool } = require('pg');
+const math = require('mathjs');
 const {
   SUPPORTED_TARGET_TYPES,
   TEST_FLOW_STAGES,
@@ -3888,6 +3889,9 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
   const passCount = rows.filter((row) => row.pass).length;
   const errorCount = rows.filter((row) => row.error).length;
   const failCount = rows.length - passCount - errorCount;
+  const namedScores = aggregateNamedScores(rows);
+  const derivedMetricsConfig = asArray(target.metadata?.eval?.derivedMetrics);
+  const derivedMetrics = computeDerivedMetrics(namedScores, derivedMetricsConfig, rows.length);
 
   return {
     summary: {
@@ -3902,9 +3906,59 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
       cacheEnabled,
       cacheHits: rows.filter((row) => row.cacheHit).length,
       maxConcurrency,
+      namedScores,
+      ...(Object.keys(derivedMetrics).length ? { derivedMetrics } : {}),
     },
     rows,
   };
+}
+
+// Unweighted average per named score across all rows that reported it — real promptfoo's own
+// aggregation weights each contribution by assertion count/explicit namedScoreWeights (see
+// util/namedMetrics.ts), which this intentionally doesn't replicate; a plain average is an
+// honest simplification for surfacing "what did this metric average out to across the run",
+// the actual value derivedMetrics formulas need to operate on.
+function aggregateNamedScores(rows) {
+  const totals = {};
+  const counts = {};
+  for (const row of rows) {
+    const named = row.namedScores;
+    if (!named || typeof named !== 'object') continue;
+    for (const [key, value] of Object.entries(named)) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) continue;
+      totals[key] = (totals[key] || 0) + numeric;
+      counts[key] = (counts[key] || 0) + 1;
+    }
+  }
+  const averages = {};
+  for (const key of Object.keys(totals)) {
+    averages[key] = totals[key] / counts[key];
+  }
+  return averages;
+}
+
+// Mirrors real promptfoo's top-level `derivedMetrics` config: named mathjs expressions
+// evaluated against the run's aggregate named scores (evaluator.ts:updateDerivedMetrics) to
+// compute a custom composite metric, e.g. `{"name": "f1", "value": "(2*precision*recall)/(precision+recall)"}`.
+// Each derived metric's own result is added to the evaluation context for subsequent metrics in
+// the list, same as real promptfoo, so one derived metric can reference an earlier one.
+function computeDerivedMetrics(namedScores, derivedMetrics, rowCount) {
+  const list = Array.isArray(derivedMetrics) ? derivedMetrics.filter((metric) => metric && metric.name && metric.value) : [];
+  if (!list.length) return {};
+  const evalContext = { ...namedScores, __count: rowCount };
+  const derived = {};
+  for (const metric of list) {
+    try {
+      const result = math.evaluate(String(metric.value), evalContext);
+      const numeric = Number(result);
+      derived[metric.name] = Number.isFinite(numeric) ? numeric : null;
+      evalContext[metric.name] = derived[metric.name] ?? 0;
+    } catch (error) {
+      derived[metric.name] = null;
+    }
+  }
+  return derived;
 }
 
 function summarizeRows(rows) {
@@ -3917,6 +3971,7 @@ function summarizeRows(rows) {
     fail,
     error,
     passRate: rows.length ? pass / rows.length : 0,
+    namedScores: aggregateNamedScores(rows),
   };
 }
 
