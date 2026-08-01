@@ -1853,6 +1853,126 @@ async function evaluateModelGradedAssertion(assertionType, output, assertion, co
   };
 }
 
+function extractTemplateVariables(text) {
+  const matches = String(text || '').matchAll(/\{\{\s*([a-zA-Z_][\w.]*)\s*(?:\|[^}]*)?\}\}/g);
+  return [...new Set([...matches].map((match) => match[1]))];
+}
+
+function datasetPersonasPrompt(prompts, numPersonas) {
+  const promptsBlock = prompts.map((prompt) => `<Prompt>\n${prompt}\n</Prompt>`).join('\n');
+  return `Consider the following prompt(s) for an LLM application:\n\n${promptsBlock}\n\nList up to ${numPersonas} distinct, realistic user personas who would plausibly send this kind of prompt. Respond ONLY as JSON of the form {"personas": string[]}, no other text.`;
+}
+
+function datasetTestCasesPrompt(prompts, persona, existingVars, numTestCasesPerPersona, variables, instructions) {
+  const promptsBlock = prompts.map((prompt) => `<Prompt>\n${prompt}\n</Prompt>`).join('\n');
+  const varList = variables.length ? variables : ['prompt'];
+  const existingBlock = existingVars.length
+    ? `Here are some existing test cases already covered — generate different ones, not duplicates:\n${existingVars
+        .slice(0, 20)
+        .map((vars) => JSON.stringify(vars))
+        .join('\n')}`
+    : 'There are no existing test cases yet.';
+  return `Consider this prompt, which contains template variables ${varList.map((v) => `{{${v}}}`).join(', ')}:\n\n${promptsBlock}\n\nThis is your persona:\n<Persona>\n${persona}\n</Persona>\n\n${existingBlock}\n\nFully embody this persona and determine realistic values for each variable such that the prompt would plausibly be sent by this persona. Generate ${numTestCasesPerPersona} DIVERSE, interesting, or unusual test cases that would be worth testing.${instructions ? ` ${instructions}` : ''}\n\nRespond ONLY as JSON of the form {"vars": [{${varList.map((v) => `"${v}": "string"`).join(', ')}}, ...]}, no other text.`;
+}
+
+// Mirrors real promptfoo's `generate dataset` command (src/testCase/synthesis.ts): generate a
+// handful of user personas for the configured prompt(s), then ask the LLM to embody each
+// persona and propose realistic-but-interesting variable values, informed by the target's
+// existing test cases so it doesn't just repeat them. Reuses the same judge/eval provider call
+// path as model-graded assertions rather than requiring its own dedicated provider config.
+async function generateEvalDatasetForTarget(target, options = {}) {
+  const evalConfig = target.metadata?.eval || {};
+  const prompts = asArray(evalConfig.prompts)
+    .map((prompt) => prompt.content)
+    .filter(Boolean);
+  if (!prompts.length) {
+    throw new Error('Add at least one prompt to this eval before generating test cases.');
+  }
+  const injectVar = evalConfig.injectVar || 'prompt';
+  const existingVars = asArray(evalConfig.testCases)
+    .map((testCase) => (testCase.vars && Object.keys(testCase.vars).length ? testCase.vars : { [injectVar]: testCase.input }))
+    .filter((vars) => Object.values(vars).some(Boolean));
+
+  let providerConfig = judgeConfigForTarget(target);
+  if (!providerConfig) {
+    const evalProvider = asArray(evalConfig.providers)[0];
+    if (evalProvider?.baseUrl && evalProvider?.model) {
+      providerConfig = {
+        providerKey: evalProvider.providerKey,
+        adapter: evalProvider.engine || adapterForProvider(evalProvider.providerKey),
+        baseUrl: evalProvider.baseUrl,
+        model: evalProvider.model,
+        apiKeySecretId: evalProvider.apiKeySecretId,
+        temperature: 0.9,
+        maxTokens: 1024,
+        systemPrompt: 'You are a helpful assistant that generates test data in strict JSON format, with no markdown fencing or commentary.',
+      };
+    }
+  }
+  if (!providerConfig) {
+    throw new Error('No generation provider available — configure a judge provider or an eval provider with a model first.');
+  }
+
+  const apiKey = await resolveProviderApiKey(target.id, providerConfig);
+  const numPersonas = Math.max(1, Math.min(10, Number(options.numPersonas) || 5));
+  const numTestCasesPerPersona = Math.max(1, Math.min(10, Number(options.numTestCasesPerPersona) || 3));
+  const instructions = String(options.instructions || '').trim();
+
+  const personasResult = await callProviderAdapter(providerConfig.adapter, {
+    ...providerConfig,
+    apiKey,
+    prompt: datasetPersonasPrompt(prompts, numPersonas),
+  });
+  let personas;
+  try {
+    const parsed = parseJsonCandidate(personasResult.output);
+    personas = Array.isArray(parsed.personas) ? parsed.personas.filter(Boolean).slice(0, numPersonas) : [];
+  } catch (error) {
+    throw new Error(`Generation provider did not return valid JSON for personas: ${error.message}`);
+  }
+  if (!personas.length) {
+    throw new Error('Generation provider did not return any personas.');
+  }
+
+  const variables = extractTemplateVariables(prompts.join('\n'));
+  const generated = [];
+  for (const persona of personas) {
+    let testCasesResult;
+    try {
+      testCasesResult = await callProviderAdapter(providerConfig.adapter, {
+        ...providerConfig,
+        apiKey,
+        prompt: datasetTestCasesPrompt(prompts, persona, existingVars, numTestCasesPerPersona, variables, instructions),
+      });
+      const parsed = parseJsonCandidate(testCasesResult.output);
+      const vars = Array.isArray(parsed.vars) ? parsed.vars : [];
+      for (const varSet of vars.slice(0, numTestCasesPerPersona)) {
+        if (varSet && typeof varSet === 'object' && !Array.isArray(varSet)) {
+          generated.push({ persona, vars: varSet });
+        }
+      }
+    } catch (error) {
+      // One persona's response failing to parse shouldn't sink the whole batch — the other
+      // personas' generated cases are still useful.
+      continue;
+    }
+  }
+  if (!generated.length) {
+    throw new Error('Generation provider did not return any usable test cases across any persona.');
+  }
+
+  return generated.map((item, index) => ({
+    name: `Generated: ${item.persona.slice(0, 48)}${item.persona.length > 48 ? '…' : ''} #${index + 1}`,
+    input: String(item.vars[injectVar] ?? Object.values(item.vars)[0] ?? ''),
+    assertion: 'contains',
+    expected: '',
+    assertions: [{ type: 'contains', value: '' }],
+    vars: item.vars,
+    tags: ['ai-generated'],
+    metadata: { persona: item.persona, generatedAt: new Date().toISOString() },
+  }));
+}
+
 async function evaluateAssertion(output, assertion = {}, context = {}) {
   const actual = String(output || '');
   const expected = String(assertion.value || '');
@@ -5379,6 +5499,22 @@ app.post('/api/targets/:id/stages/eval/import', requireAuth, requireAdmin, async
     [updated.promptfooConfig, req.params.id],
   );
   res.json(updated);
+});
+
+// Preview-only: generates candidate test cases via LLM synthesis but does not persist them —
+// the caller reviews the result and saves via the normal eval-config PATCH route, same as real
+// promptfoo's CLI prints generated cases and requires an explicit `--write` to apply them.
+app.post('/api/targets/:id/stages/eval/generate-dataset', requireAuth, requireAdmin, async (req, res) => {
+  const payload = await fetchTarget(req.params.id);
+  if (!payload) {
+    return res.status(404).json({ error: 'Target not found' });
+  }
+  try {
+    const testCases = await generateEvalDatasetForTarget(payload.target, req.body || {});
+    res.json({ testCases });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.get('/api/targets/:id/stages/eval/runs', requireAuth, async (req, res) => {

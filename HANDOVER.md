@@ -2332,3 +2332,46 @@ this loop, not an unlimited test double.
       request. Restored the target's original red-team config
       (verified byte-for-byte identical to the pre-test snapshot) after
       each of the two live-run tests.
+
+## Change log — iteration 45 (AI-generated test-case dataset synthesis)
+
+63. Real promptfoo has a `generate dataset` command (`src/testCase/
+    synthesis.ts`) that uses an LLM to invent test cases: generate a
+    handful of user personas for the configured prompt, then ask each
+    persona to propose realistic-but-interesting variable values,
+    informed by existing test cases so it doesn't repeat them. This
+    product had manual entry, bulk JSON/CSV import, and full config
+    import for building a test suite, but nothing AI-assisted — the
+    Eval workspace's dataset-authoring story was otherwise complete.
+    - Backend: `generateEvalDatasetForTarget()` in `server.cjs`
+      replicates the same two-step synthesis (`datasetPersonasPrompt` →
+      `datasetTestCasesPrompt`, parsed with the existing
+      `parseJsonCandidate` helper that already tolerates messy/fenced
+      LLM JSON output). Reuses the target's judge provider if
+      configured, otherwise falls back to its first eval provider —
+      no new provider-config surface needed. New preview-only route
+      `POST /api/targets/:id/stages/eval/generate-dataset`: generates
+      and returns candidate test cases but does NOT persist them,
+      mirroring real promptfoo's CLI (prints results, requires an
+      explicit `--write` to apply) — the existing eval-config PATCH
+      route already handles actually saving them once the user adds
+      the preview to their editor and clicks Save.
+    - Frontend: new "Generate test cases" section in the Eval
+      workspace (personas count, cases-per-persona count, optional
+      free-text instructions, a preview list, "Add all to test cases"
+      / "Discard"). Generated cases carry a `tags: ['ai-generated']`
+      marker and `metadata.persona` so they're identifiable later.
+    - Verified live end to end, not code-review-only: (1) called the
+      new route directly against the real E2E Groq target and got back
+      4 genuinely distinct, on-topic generated test cases from 2 real
+      personas in ~1.3s; (2) drove the actual UI in a real browser —
+      logged in, opened the real Eval workspace, clicked the real
+      "Generate preview" button (a real DOM click, not a direct API
+      call), confirmed 6 diverse generated cases rendered in the
+      preview (3 personas × 2 cases/persona, the component's default),
+      clicked the real "Add all to test cases" button, confirmed all 6
+      appeared in the test-case editor's live React state; (3) since
+      this is a preview-only feature, confirmed via a fresh GET that
+      the target's actually-stored config was untouched throughout
+      (still just the original single "Baseline utility test") — no
+      restore needed because nothing was ever persisted.

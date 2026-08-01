@@ -22,6 +22,7 @@ import {
   getTargetReport,
   getRunDetail,
   importEvalStageConfig,
+  generateEvalDataset,
   importTarget,
   login,
   logout,
@@ -1003,6 +1004,12 @@ function EvalWorkspace({
     timeoutMs: Number(evalConfig.runOptions?.timeoutMs || 30000),
   });
   const [bulkText, setBulkText] = useState('');
+  const [generateNumPersonas, setGenerateNumPersonas] = useState(3);
+  const [generateNumPerPersona, setGenerateNumPerPersona] = useState(2);
+  const [generateInstructions, setGenerateInstructions] = useState('');
+  const [generatePreview, setGeneratePreview] = useState<EvalStageConfigPayload['testCases']>([]);
+  const [generateBusy, setGenerateBusy] = useState(false);
+  const [generateError, setGenerateError] = useState('');
   const [configImportText, setConfigImportText] = useState('');
   const [configImporting, setConfigImporting] = useState(false);
   const [datasets, setDatasets] = useState<TargetDataset[]>([]);
@@ -1210,6 +1217,30 @@ function EvalWorkspace({
       );
       setMessage('Imported CSV test cases.');
     }
+  }
+
+  async function handleGenerateDataset() {
+    if (isViewer) return;
+    setGenerateError('');
+    setGenerateBusy(true);
+    try {
+      const result = await generateEvalDataset(token, detail.target.id, {
+        numPersonas: generateNumPersonas,
+        numTestCasesPerPersona: generateNumPerPersona,
+        instructions: generateInstructions.trim() || undefined,
+      });
+      setGeneratePreview(result.testCases.map(normalizeCaseForEditor));
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : 'Unable to generate test cases');
+    } finally {
+      setGenerateBusy(false);
+    }
+  }
+
+  function addGeneratedCasesToEditor() {
+    setTestCases((current) => [...current, ...generatePreview]);
+    setGeneratePreview([]);
+    setMessage(`Added ${generatePreview.length} generated test case(s) — remember to save.`);
   }
 
   async function importPromptfooConfigIntoEval() {
@@ -1825,6 +1856,71 @@ function EvalWorkspace({
           <button className="secondary-button" type="button" onClick={parseBulkCases}>
             Import test cases
           </button>
+        </section>
+
+        <section className="subpanel">
+          <div className="subpanel-head">
+            <div>
+              <h3>Generate test cases</h3>
+              <p className="muted">
+                Uses an LLM to invent user personas for your prompt, then asks each persona for realistic-but-interesting
+                variable values — preview before adding. Uses the judge provider if configured, otherwise the first eval provider.
+              </p>
+            </div>
+          </div>
+          <div className="form-grid">
+            <div className="field">
+              <label>Personas</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={generateNumPersonas}
+                onChange={(event) => setGenerateNumPersonas(Number(event.target.value))}
+              />
+            </div>
+            <div className="field">
+              <label>Cases per persona</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={generateNumPerPersona}
+                onChange={(event) => setGenerateNumPerPersona(Number(event.target.value))}
+              />
+            </div>
+            <div className="field span-2">
+              <label>Additional instructions (optional)</label>
+              <input
+                value={generateInstructions}
+                onChange={(event) => setGenerateInstructions(event.target.value)}
+                placeholder="e.g. focus on edge cases involving multiple languages"
+              />
+            </div>
+          </div>
+          <button className="secondary-button" type="button" disabled={isViewer || generateBusy} title={viewerTitle} onClick={handleGenerateDataset}>
+            {generateBusy ? 'Generating...' : 'Generate preview'}
+          </button>
+          {generateError ? <p className="error">{generateError}</p> : null}
+          {generatePreview.length ? (
+            <div className="generated-preview">
+              <p className="muted">{generatePreview.length} generated test case(s) — review, then add to the editor above and save.</p>
+              {generatePreview.map((testCase, index) => (
+                <div className="prompt-row" key={`${testCase.name}-${index}`}>
+                  <strong>{testCase.name}</strong>
+                  <p className="muted">{JSON.stringify(testCase.vars)}</p>
+                </div>
+              ))}
+              <div className="stage-actions">
+                <button className="primary-button" type="button" disabled={isViewer} title={viewerTitle} onClick={addGeneratedCasesToEditor}>
+                  Add all to test cases
+                </button>
+                <button className="ghost-button" type="button" onClick={() => setGeneratePreview([])}>
+                  Discard
+                </button>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="subpanel">

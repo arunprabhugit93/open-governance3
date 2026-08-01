@@ -341,6 +341,17 @@ export function importEvalStageConfig(
   });
 }
 
+export function generateEvalDataset(
+  token: string,
+  id: string,
+  payload: { numPersonas?: number; numTestCasesPerPersona?: number; instructions?: string },
+): Promise<{ testCases: EvalStageConfigPayload['testCases'] }> {
+  return request<{ testCases: EvalStageConfigPayload['testCases'] }>(`/api/targets/${id}/stages/eval/generate-dataset`, token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listEvalRuns(token: string, id: string): Promise<{ runs: EvalRun[] }> {
   return request<{ runs: EvalRun[] }>(`/api/targets/${id}/stages/eval/runs`, token);
 }
