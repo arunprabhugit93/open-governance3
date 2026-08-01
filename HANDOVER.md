@@ -1901,3 +1901,58 @@ this loop, not an unlimited test double.
       unreachable for any scanner in the current catalog; it remains in
       place only as a safety net for a future scanner key that gets
       added to the catalog before its check is implemented.
+
+## Change log — iteration 37 (CRITICAL: native engine mode crash on empty-array config fields)
+
+55. User-reported audit (external review, with real file:line references and a
+    captured stack trace from an actual native-CLI subprocess run) caught a
+    genuine crash bug this session's own earlier work had shipped: **any
+    target with a red-team config attached crashed native engine mode eval
+    runs entirely**, via a real `YAMLException` thrown by the real,
+    vendored `js-yaml` parser inside the actual `promptfoo` CLI subprocess
+    — not a hand-wavy "might be an issue," a reproduced crash.
+    - Root cause: `toYaml()` (`server.cjs`) has an array branch whose empty
+      case does `if (!value.length) return '[]';` with **no indentation
+      prefix applied** — a bare, unpadded early return. The *caller* (the
+      object-property branch) treats any array field, empty or not,
+      identically: `` `${pad}${key}:\n${toYaml(item, indent + 2)}` ``. For a
+      non-empty array this is correct (each element gets its own indented
+      `- item` line from the recursive call). For an **empty** array, the
+      recursive call just returns the bare 2-character string `"[]"` with
+      zero indentation, producing output shaped like:
+      ```
+        defaultTest:
+          vars:
+      assert: []
+      ```
+      — `assert: []` lands at the WRONG indentation (not nested under
+      `defaultTest:`), which real YAML correctly refuses to parse as a
+      value for the preceding key. This was invisible until now because
+      no config had ever actually contained an empty-array field routed
+      through native mode's YAML serialization until this session's own
+      `defaultTest.assert` work (iteration 32) started persisting
+      `assert: []` as the default value on every target.
+    - **This wasn't limited to `defaultTest.assert`** — the bug is generic
+      to `toYaml()`, so it would have silently corrupted the native-mode
+      YAML for *any* empty array field the moment one appeared (`plugins:
+      []`, `strategies: []`, `entities: []`, `customProbes: []`,
+      `language: []`, etc.) — this session's own testing happened not to
+      hit it only because those fields are rarely left empty in practice,
+      unlike `defaultTest.assert` which defaults to `[]` on every target.
+    - Fixed by special-casing empty arrays to render inline
+      (`${pad}${key}: []`) in the object-property branch, instead of
+      falling through to the newline-plus-recursive-call path meant for
+      non-empty arrays. One targeted change, fixes every empty-array field
+      at once rather than just the one that happened to be reported.
+    - Verified live, not just re-reading the diff: (1) fetched the real
+      exported YAML for the E2E reference target (which has real red-team
+      config with `defaultTest.assert: []`) via
+      `GET /api/targets/:id/export/yaml`, fed it through the actual
+      `js-yaml` package's `yaml.load()`, and confirmed it now parses
+      cleanly with `defaultTest.assert` correctly round-tripping to `[]`;
+      (2) switched the E2E target's eval run options to
+      `engineMode: 'native'` and ran a real eval through the actual
+      installed-promptfoo-CLI path — completed successfully (previously
+      this exact scenario is what the reporting audit had caught
+      crashing). Restored the target's `engineMode` back to `direct`
+      afterward and cleaned up the test run.

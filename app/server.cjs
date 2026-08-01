@@ -2925,6 +2925,71 @@ function resolveScriptPath(scriptRef) {
   return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
 }
 
+// promptfoo's `extensions` config: `file://path/to/hook.js[:functionName]` lifecycle hooks.
+// Scoped to `afterEach` only — the most commonly used hook (per-row custom grading/telemetry)
+// and the one with the simplest, best-defined mutation contract. `beforeAll`/`beforeEach`/
+// `afterAll` mutate the whole test suite or the full result set rather than one row, which
+// needs deeper plumbing into the run's task-construction/summary phases; left as a scoped
+// follow-up rather than a partial, easy-to-get-subtly-wrong implementation of all four.
+function parseExtensionRef(extension) {
+  const raw = String(extension || '').trim();
+  if (!raw.startsWith('file://')) return null;
+  const withoutScheme = raw.slice('file://'.length);
+  const lastColon = withoutScheme.lastIndexOf(':');
+  // A colon at index <=1 is a Windows drive letter (e.g. C:\...), not a function-name
+  // separator — only split on a colon that appears after that.
+  if (lastColon > 1) {
+    return { scriptPath: withoutScheme.slice(0, lastColon), functionName: withoutScheme.slice(lastColon + 1) || undefined };
+  }
+  return { scriptPath: withoutScheme, functionName: undefined };
+}
+
+async function runAfterEachExtensionHooks(extensions, test, result) {
+  const list = Array.isArray(extensions) ? extensions.filter(Boolean) : [];
+  if (!list.length) return result;
+  let current = result;
+  for (const extension of list) {
+    const ref = parseExtensionRef(extension);
+    if (!ref) continue;
+    // Extensions targeting a different named hook (beforeAll/beforeEach/afterAll) are skipped;
+    // an extension with no function name, or a custom function name, runs for every hook —
+    // same selection rule as real promptfoo (see evaluatorHelpers.ts:getExtensionHookName).
+    const knownHooks = new Set(['beforeAll', 'beforeEach', 'afterEach', 'afterAll']);
+    if (ref.functionName && knownHooks.has(ref.functionName) && ref.functionName !== 'afterEach') continue;
+    const resolvedPath = path.isAbsolute(ref.scriptPath) ? ref.scriptPath : path.resolve(process.cwd(), ref.scriptPath);
+    let loaded;
+    try {
+      loaded = await loadProviderScript(resolvedPath);
+    } catch (error) {
+      throw new Error(`Extension hook failed to load (${extension}): ${error.message}`);
+    }
+    const fn =
+      ref.functionName && ref.functionName !== 'afterEach'
+        ? loaded?.[ref.functionName]
+        : typeof loaded === 'function'
+          ? loaded
+          : loaded?.afterEach;
+    if (typeof fn !== 'function') {
+      throw new Error(`Extension hook (${extension}) does not export a callable afterEach function`);
+    }
+    const context = { test, result: { ...current, namedScores: { ...(current.namedScores || {}) }, metadata: { ...(current.metadata || {}) } } };
+    const useNewConvention = ref.functionName === 'afterEach';
+    const returned = useNewConvention ? await fn(context, { hookName: 'afterEach' }) : await fn('afterEach', context);
+    // Only namedScores/metadata are contractually mutable here, matching real promptfoo
+    // (evaluator.ts shallow-merges exactly these two fields back after an afterEach hook) —
+    // pass/score themselves are deliberately not overridable from an extension.
+    const returnedResult = returned?.result;
+    if (returnedResult && typeof returnedResult === 'object') {
+      current = {
+        ...current,
+        namedScores: { ...(current.namedScores || {}), ...(returnedResult.namedScores || {}) },
+        metadata: { ...(current.metadata || {}), ...(returnedResult.metadata || {}) },
+      };
+    }
+  }
+  return current;
+}
+
 async function loadProviderScript(scriptPath) {
   if (!fs.existsSync(scriptPath)) throw new Error(`Custom script provider not found: ${scriptPath}`);
   if (scriptPath.endsWith('.mjs')) {
@@ -3193,6 +3258,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
   const providers = config.providers || [];
   const prompts = config.prompts || [];
   const tests = config.tests || [];
+  const extensions = asArray(target.metadata?.eval?.extensions);
   const repeat = Math.max(1, Number(runOptions.repeat || 1));
   const delayMs = Math.max(0, Number(runOptions.delayMs || 0));
   const maxConcurrency = Math.max(1, Number(runOptions.maxConcurrency || 1));
@@ -3320,6 +3386,36 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         }
       }
       const passed = assertionResults.every((assertion) => assertion.pass);
+      let hookExtras = { namedScores: {}, metadata: {} };
+      if (extensions.length) {
+        try {
+          hookExtras = await runAfterEachExtensionHooks(
+            extensions,
+            { description: task.test.description, vars: task.vars },
+            { pass: passed, output: result.output, namedScores: {}, metadata: {} },
+          );
+        } catch (error) {
+          // An extension hook failing shouldn't silently swallow the eval row it applies to —
+          // surface it as a real row error, same as an assertion throwing.
+          return {
+            providerIndex: task.providerIndex,
+            promptIndex: task.promptIndex,
+            testIndex: task.testIndex,
+            repeatIndex: task.repeatIndex,
+            provider: task.provider.label,
+            test: task.test.description,
+            prompt: task.prompt,
+            output: result.output,
+            assertions: assertionResults,
+            pass: false,
+            error: error.message,
+            cacheHit,
+            cacheKey,
+            latencyMs,
+            tokenUsage: result.tokenUsage,
+          };
+        }
+      }
       return {
         providerIndex: task.providerIndex,
         promptIndex: task.promptIndex,
@@ -3331,6 +3427,8 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         output: result.output,
         assertions: assertionResults,
         pass: passed,
+        ...(Object.keys(hookExtras.namedScores || {}).length ? { namedScores: hookExtras.namedScores } : {}),
+        ...(Object.keys(hookExtras.metadata || {}).length ? { metadata: hookExtras.metadata } : {}),
         cacheHit,
         cacheKey,
         latencyMs,
@@ -4357,6 +4455,17 @@ function toYaml(value, indent = 0) {
   if (value && typeof value === 'object') {
     return Object.entries(value)
       .map(([key, item]) => {
+        // An empty array must be emitted inline (`key: []`) — nesting it on the next line
+        // (the general array-field branch below) produces `key:\n[]`, where the `[]` sits at
+        // the SAME indentation as `key:` instead of under it (the array branch's own
+        // `if (!value.length) return '[]'` early-return skips applying `pad` entirely). Real
+        // YAML parsers (js-yaml, confirmed live via native engine mode) reject that as
+        // malformed — a bare `[]` line can't be parsed as a value for the preceding key at
+        // that indentation. Caught this the hard way: any config with an empty array field
+        // (e.g. `defaultTest.assert: []`) crashed the real installed-promptfoo-CLI path.
+        if (Array.isArray(item) && !item.length) {
+          return `${pad}${key}: []`;
+        }
         if (Array.isArray(item)) {
           return `${pad}${key}:\n${toYaml(item, indent + 2)}`;
         }
