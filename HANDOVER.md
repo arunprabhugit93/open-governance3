@@ -3395,3 +3395,54 @@ this loop, not an unlimited test double.
       confirm the baseline (no `namedScores` key at all when nothing
       is tagged) is unchanged. `tsc --noEmit` and the production
       `vite build` both passed clean.
+
+## Change log — iteration 68 (test-level `threshold` — score-based pass override)
+
+86. Same category of gap as iteration 67 (a documented real-promptfoo
+    TestCase field completely unimplemented, and silently stripped
+    during config normalization on top of that): real promptfoo's
+    `TestCase.threshold` ("The required score for this test case. If
+    not provided, the test case is graded pass/fail.") overrides the
+    normal all-assertions-must-pass logic with "pass iff the
+    weighted-average assertion score meets this threshold"
+    (`assertionsResult.ts` `testResult()` — confirmed by reading the
+    actual override logic, not just the schema comment). This
+    product's `executeEvalRun` always used strict AND logic
+    (`assertionResults.every(a => a.pass)`) with no way to express a
+    score-based pass condition at the test level short of nesting
+    every assertion inside one `assert-set` (already supported, but a
+    heavier authoring pattern than real promptfoo configs commonly
+    use). `buildEvalTests()` didn't even pass a `threshold` field
+    through into the built test object, and `normalizeDatasetRows()`
+    dropped it too — so importing a real config using this field would
+    silently grade every affected test with stricter logic than the
+    config actually specifies.
+    - Added `threshold` to `normalizeDatasetRows()`'s and
+      `buildEvalTests()`'s output shape.
+    - Added `computeWeightedAssertionScore(assertionResults)` (real
+      promptfoo's own `totalScore/totalWeight` computation) and used
+      it to override `passed` in `executeEvalRun` only when
+      `task.test.threshold` is numeric — the untagged-test path is
+      byte-for-byte unchanged.
+    - Native-engine-mode needed no executor change: both
+      `buildNativePromptfooConfig` and `buildPortableExportConfig`
+      already spread `...test` when mapping tests for the real
+      promptfoo CLI/export, so `threshold` flows through automatically
+      once it survives normalization — the real CLI does its own
+      threshold-override grading internally.
+    - Added a "Pass threshold (optional)" field to the eval test-case
+      editor (test-level, distinct from the existing per-assertion
+      threshold and the assert-set group threshold). Extended
+      `EvalStageConfigPayload.testCases[]` in `api.ts`.
+    - Verified live against the real Groq-backed E2E reference target:
+      set two assertions on the baseline test — one that matches the
+      real Groq response, one that deliberately doesn't — with
+      `threshold: 0.4`; a real eval run correctly passed the row
+      (weighted score 0.5 >= 0.4) despite one assertion genuinely
+      failing. Re-ran the identical two-assertion config with the
+      threshold field removed and confirmed the row correctly FAILED
+      under the original strict AND logic — proving the threshold,
+      not some other change, was the deciding factor. Restored the
+      target's original single-assertion config byte-for-byte
+      afterward and confirmed the baseline passes as before. `tsc
+      --noEmit` and the production `vite build` both passed clean.

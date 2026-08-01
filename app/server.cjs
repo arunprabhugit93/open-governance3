@@ -559,6 +559,10 @@ function normalizeDatasetRows(rows) {
     tags: Array.isArray(row.tags) ? row.tags : [],
     metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
     transform: row.transform || row.options?.transform || undefined,
+    // Real promptfoo's test-level `threshold` — overrides the default all-assertions-must-pass
+    // logic with "pass iff weighted-average assertion score >= threshold" (see executeEvalRun).
+    // Was previously dropped here entirely, silently losing it on import from a real config.
+    threshold: Number.isFinite(Number(row.threshold)) ? Number(row.threshold) : undefined,
   }));
 }
 
@@ -1093,6 +1097,7 @@ function buildEvalTests(target) {
       assert: [...baseAssertions, ...normalizeAssertions(testCase.assertions, testCase.assertion, testCase.expected)],
       metadata: testCase.metadata || undefined,
       options: testCase.transform ? { transform: testCase.transform } : undefined,
+      threshold: Number.isFinite(Number(testCase.threshold)) ? Number(testCase.threshold) : undefined,
     }));
   }
   return [
@@ -3911,6 +3916,21 @@ function mergeNamedScores(metricScores, hookScores) {
   return merged;
 }
 
+// Weighted-average score across a test's assertions — same computation real promptfoo's
+// AssertionsResult.testResult() uses (totalScore/totalWeight), used only when the test itself
+// sets a `threshold` (see below); otherwise pass/fail stays the existing all-must-pass logic.
+function computeWeightedAssertionScore(assertionResults) {
+  let totalScore = 0;
+  let totalWeight = 0;
+  for (const assertion of assertionResults) {
+    const score = Number.isFinite(Number(assertion.score)) ? Number(assertion.score) : assertion.pass ? 1 : 0;
+    const weight = Number.isFinite(Number(assertion.weight)) ? Number(assertion.weight) : 1;
+    totalScore += score * weight;
+    totalWeight += weight;
+  }
+  return totalWeight > 0 ? totalScore / totalWeight : 0;
+}
+
 async function executeEvalRun(target, runOptions = {}, execution = {}) {
   if (runOptions.engineMode === 'native') {
     return executeNativeEvalRun(target, runOptions);
@@ -4079,7 +4099,13 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
           });
         }
       }
-      const passed = assertionResults.every((assertion) => assertion.pass);
+      const testThreshold = Number(task.test?.threshold);
+      // A numeric test-level threshold overrides the default all-assertions-must-pass logic
+      // with "pass iff weighted-average assertion score >= threshold" — matches real
+      // promptfoo's own AssertionsResult.testResult() override behavior exactly.
+      const passed = Number.isFinite(testThreshold)
+        ? computeWeightedAssertionScore(assertionResults) >= testThreshold
+        : assertionResults.every((assertion) => assertion.pass);
       const metricNamedScores = computeMetricNamedScores(assertionResults);
       let hookExtras = { namedScores: {}, metadata: {} };
       if (extensions.length) {

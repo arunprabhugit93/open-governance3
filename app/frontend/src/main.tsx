@@ -1946,6 +1946,24 @@ function EvalWorkspace({
                   adapter didn't recognize.
                 </p>
               </div>
+              <div className="field">
+                <label>Pass threshold (optional)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  value={testCase.threshold ?? ''}
+                  onChange={(event) =>
+                    updateTestCase(index, { threshold: event.target.value === '' ? undefined : Number(event.target.value) })
+                  }
+                  placeholder="e.g. 0.7"
+                />
+                <p className="field-help">
+                  When set, this case passes based on its weighted-average assertion score meeting this threshold,
+                  instead of requiring every assertion to pass individually.
+                </p>
+              </div>
               <div className="assertion-editor span-3">
                 <div className="row-toolbar">
                   <strong>Assertions</strong>

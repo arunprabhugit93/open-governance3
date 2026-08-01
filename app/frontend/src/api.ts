@@ -148,6 +148,7 @@ export interface EvalStageConfigPayload {
     tags?: string[];
     metadata?: Record<string, unknown>;
     transform?: string;
+    threshold?: number;
   }>;
   promptTemplate: string;
   injectVar: string;
