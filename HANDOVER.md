@@ -3340,3 +3340,58 @@ this loop, not an unlimited test double.
       both the run response row and the `/runs/:id` trace endpoint.
       `tsc --noEmit` and the production `vite build` both passed
       clean.
+
+## Change log — iteration 67 (assertion-level `metric` tagging — real promptfoo's primary namedScores mechanism)
+
+85. A different, larger class of gap than iterations 64-66: not a
+    field silently dropped after being computed, but a whole
+    documented promptfoo feature never implemented at all.
+    `assertion.metric` is a first-class field in real promptfoo's own
+    assertion schema ("Tag this assertion result as a named metric",
+    `promptfoo-source/src/types/index.ts`), and it's the PRIMARY,
+    most-commonly-used way real promptfoo configs get `namedScores` —
+    assertions across a test tagged with the same metric name combine
+    into a weighted-average score, shown in the results summary
+    (`assertionsResult.ts` `addResult`). This product had a
+    `namedScores` mechanism already (from an earlier session), but it
+    was wired to ONLY one source: a custom JS extension-hook file's
+    `afterEach` return value — a much rarer, more advanced path. The
+    much more common `assertion.metric` tag had no effect whatsoever,
+    and worse: `normalizeAssertions()` was silently stripping the
+    `metric` field entirely during config normalization (it wasn't in
+    the field whitelist), so even *importing a real promptfoo config*
+    that used this feature lost the tag before it ever reached either
+    execution engine — a real-config-import breakage, not just a
+    from-scratch-authoring gap.
+    - Fixed `normalizeAssertions()` to preserve `metric` (one-line
+      fix, but the actual root cause — everything downstream reads
+      from its output). Nested `assert-set` sub-assertions were
+      already unaffected since `normalizeAssertions` copies that
+      array through unnormalized.
+    - Added `computeMetricNamedScores(assertionResults)` — weighted
+      average per metric name, recursing into `assert-set` results so
+      nested sub-assertions' own metric tags are honored too, exactly
+      matching real promptfoo's `addResult` weighting (`score × weight`
+      summed over `weight` summed, default weight 1).
+    - Added `mergeNamedScores(metricScores, hookScores)` so
+      metric-tagged scores and extension-hook-provided scores combine
+      additively when they share a name, instead of one silently
+      overwriting the other.
+    - Wired both into all eval row-construction sites in
+      `executeEvalRun`. Native-engine-mode needed no executor change
+      at all — once `metric` survives normalization it flows through
+      `nativeAssertion()` (a passthrough) into the real promptfoo CLI
+      config, which does its own metric aggregation internally.
+    - Added a "Metric name (optional)" input to the top-level
+      assertion editor row in the Eval workspace (previously only
+      assert-set sub-assertions had a weight field; no assertion had a
+      metric field at all). Extended `EvalAssertion` in `api.ts`.
+    - Verified live against the real Groq-backed E2E reference target:
+      captured the target's exact test-case config, PATCHed in
+      `metric: "Readiness"` on the baseline assertion, ran a real eval
+      and confirmed the row and run summary both returned
+      `namedScores: {"Readiness": 1}` with the correct weighted score,
+      then restored the original config byte-for-byte and re-ran to
+      confirm the baseline (no `namedScores` key at all when nothing
+      is tagged) is unchanged. `tsc --noEmit` and the production
+      `vite build` both passed clean.

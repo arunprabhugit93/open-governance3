@@ -33,7 +33,8 @@ export interface EvalAssertion {
   value: string;
   threshold?: number;
   weight?: number;
-  assert?: Array<{ type: string; value: string; weight?: number }>;
+  metric?: string;
+  assert?: Array<{ type: string; value: string; weight?: number; metric?: string }>;
 }
 
 export interface TargetPayload {

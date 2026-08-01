@@ -1991,6 +1991,12 @@ function EvalWorkspace({
                           placeholder={assertionHelp(assertion.type)}
                         />
                       )}
+                      <input
+                        value={assertion.metric || ''}
+                        onChange={(event) => updateTestCaseAssertion(index, assertionIndex, { metric: event.target.value || undefined })}
+                        placeholder="Metric name (optional)"
+                        title="Groups this assertion's score with any others sharing the same metric name into a weighted-average named score shown on the run summary."
+                      />
                       <button
                         className="ghost-button"
                         type="button"

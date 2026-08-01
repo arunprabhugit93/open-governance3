@@ -536,6 +536,11 @@ function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValu
         // both must survive normalization or the group evaluates as if it had no members.
         assert: Array.isArray(assertion.assert) ? assertion.assert : undefined,
         weight: assertion.weight,
+        // Real promptfoo's own weighted-average named-score tagging (assertionsResult.ts
+        // `addResult`) — was being silently dropped here, which broke both this product's own
+        // grading AND native-engine-mode configs built from these normalized assertions, since
+        // by the time they reach the real promptfoo CLI the tag was already gone.
+        metric: assertion.metric,
       }))
       .filter((assertion) => assertion.type);
   }
@@ -3853,6 +3858,59 @@ async function executeNativeEvalRun(target, runOptions = {}) {
   }
 }
 
+// Mirrors real promptfoo's `assertion.metric` tagging (assertionsResult.ts `addResult`):
+// assertions tagged with the same `metric` name are combined into a weighted-average named
+// score for the row, independent of the assert-set/extension-hook namedScores mechanisms this
+// product already had. Weight defaults to 1, matching real promptfoo's own default.
+function computeMetricNamedScores(assertionResults) {
+  const totals = {};
+  const weights = {};
+  const visit = (assertion) => {
+    const metric = assertion.metric;
+    if (metric && typeof metric === 'string') {
+      const score = Number.isFinite(Number(assertion.score)) ? Number(assertion.score) : assertion.pass ? 1 : 0;
+      const weight = Number.isFinite(Number(assertion.weight)) ? Number(assertion.weight) : 1;
+      totals[metric] = (totals[metric] || 0) + score * weight;
+      weights[metric] = (weights[metric] || 0) + weight;
+    }
+    // assert-set groups nested sub-assertion results under `.results` — each can carry its own
+    // `metric` tag independently of the group itself, same as real promptfoo.
+    if (Array.isArray(assertion.results)) {
+      assertion.results.forEach(visit);
+    }
+  };
+  assertionResults.forEach(visit);
+  const scores = {};
+  for (const metric of Object.keys(totals)) {
+    scores[metric] = weights[metric] > 0 ? totals[metric] / weights[metric] : 0;
+  }
+  return scores;
+}
+
+// Combines assertion-tagged metric scores with extension-hook-provided namedScores. Where both
+// contribute to the same metric name, they're merged as additional weighted-1 samples rather
+// than one silently overwriting the other — same additive spirit as real promptfoo's own
+// `result.namedScores` merge in `addResult`.
+function mergeNamedScores(metricScores, hookScores) {
+  const totals = {};
+  const weights = {};
+  for (const [key, value] of Object.entries(metricScores || {})) {
+    totals[key] = (totals[key] || 0) + Number(value);
+    weights[key] = (weights[key] || 0) + 1;
+  }
+  for (const [key, value] of Object.entries(hookScores || {})) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) continue;
+    totals[key] = (totals[key] || 0) + numeric;
+    weights[key] = (weights[key] || 0) + 1;
+  }
+  const merged = {};
+  for (const key of Object.keys(totals)) {
+    merged[key] = weights[key] > 0 ? totals[key] / weights[key] : 0;
+  }
+  return merged;
+}
+
 async function executeEvalRun(target, runOptions = {}, execution = {}) {
   if (runOptions.engineMode === 'native') {
     return executeNativeEvalRun(target, runOptions);
@@ -4022,6 +4080,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         }
       }
       const passed = assertionResults.every((assertion) => assertion.pass);
+      const metricNamedScores = computeMetricNamedScores(assertionResults);
       let hookExtras = { namedScores: {}, metadata: {} };
       if (extensions.length) {
         try {
@@ -4052,9 +4111,11 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
             finishReason: result.finishReason || null,
             rawResponse: truncateRawResponseForStorage(result.rawResponse),
             vars: task.vars,
+            ...(Object.keys(metricNamedScores).length ? { namedScores: metricNamedScores } : {}),
           };
         }
       }
+      const rowNamedScores = mergeNamedScores(metricNamedScores, hookExtras.namedScores);
       return {
         providerIndex: task.providerIndex,
         promptIndex: task.promptIndex,
@@ -4066,7 +4127,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         output: result.output,
         assertions: assertionResults,
         pass: passed,
-        ...(Object.keys(hookExtras.namedScores || {}).length ? { namedScores: hookExtras.namedScores } : {}),
+        ...(Object.keys(rowNamedScores).length ? { namedScores: rowNamedScores } : {}),
         ...(Object.keys(hookExtras.metadata || {}).length ? { metadata: hookExtras.metadata } : {}),
         cacheHit,
         cacheKey,
