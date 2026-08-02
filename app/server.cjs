@@ -966,6 +966,15 @@ function normalizePromptfooTest(test, index = 0, injectVar = 'prompt') {
     tags: Array.isArray(test?.tags) ? test.tags : [],
     metadata: test?.metadata && typeof test.metadata === 'object' ? test.metadata : undefined,
     transform: test?.options?.transform || test?.transform || undefined,
+    // Test-level fields added across this session (thresholds, rubricPrompt, storeOutputAs,
+    // providerOutput) were only ever wired into the SAVE path (normalizeDatasetRows) and
+    // execution — this IMPORT path (a real promptfoo config being loaded in) independently
+    // built its own row shape and never picked any of them up, silently losing them on import
+    // even though full execution support already existed for all four.
+    threshold: Number.isFinite(Number(test?.threshold)) ? Number(test.threshold) : undefined,
+    rubricPrompt: test?.options?.rubricPrompt || test?.rubricPrompt || undefined,
+    storeOutputAs: test?.options?.storeOutputAs || test?.storeOutputAs || undefined,
+    providerOutput: test?.providerOutput || undefined,
   };
 }
 

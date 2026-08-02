@@ -4012,3 +4012,35 @@ this loop, not an unlimited test double.
       pre-existing cache-hit path (iteration 62) still works correctly
       across two consecutive cached runs. `tsc --noEmit` and the
       production `vite build` both passed clean.
+
+## Change log — iteration 79 (eval config import: preserve threshold/rubricPrompt/storeOutputAs/providerOutput)
+
+97. Found while directly answering the user's "is everything covered"
+    question rather than through the usual blind sweep: the last four
+    test-level fields added this session (iterations 64, 71, 73, 74 —
+    `threshold`, `rubricPrompt`, `storeOutputAs`, `providerOutput`)
+    were fully wired into the SAVE path (`normalizeDatasetRows`) and
+    execution, but the *config-import* route
+    (`POST /stages/eval/import`, used when pasting/uploading a real
+    promptfoo YAML/JSON config) goes through a separate function,
+    `normalizePromptfooTest()`, that built its own row shape
+    independently and had never been updated to extract any of the
+    four — so importing a real promptfoo config using any of them
+    would have silently lost them on import, even though full
+    execution support already existed once a test case had the field
+    set some other way.
+    - Added `threshold`/`rubricPrompt`/`storeOutputAs`/`providerOutput`
+      extraction to `normalizePromptfooTest()`, matching the same
+      field-location conventions already established this session
+      (`threshold`/`providerOutput` are top-level test fields;
+      `rubricPrompt`/`storeOutputAs` live under `test.options`).
+    - Verified live against the real E2E reference target: imported an
+      actual YAML config (via the real import endpoint, not a
+      simulated payload) setting all four fields at once, and
+      confirmed every one survived into the target's stored test case
+      exactly as authored (`threshold: 0.75`, the literal
+      `rubricPrompt` text, `storeOutputAs: "importedRegister"`, the
+      literal `providerOutput` text). Restored the target's full
+      original eval metadata (test cases AND providers, since
+      `/import` replaces both) afterward and confirmed the baseline
+      eval run still passes cleanly.
