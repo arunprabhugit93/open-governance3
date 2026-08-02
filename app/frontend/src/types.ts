@@ -286,6 +286,13 @@ export interface TargetReport {
     plugin?: string;
     strategy?: string;
     severity?: string;
+    // 'self-hosted-generated' = this probe's content came from the self-hosted remote-only-
+    // plugin generation fork, not a hand-written local template.
+    source?: string;
+    // true when strategy is one of promptfoo's remote-only strategies (normally a stateful/
+    // multi-turn/adaptive attack upstream) and was approximated as a single self-hosted-LLM
+    // transform instead — reduced fidelity vs upstream, always labeled.
+    strategyApproximated?: boolean;
   }>;
   frameworkCompliance: {
     pluginPassRateThreshold: number;

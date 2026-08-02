@@ -686,6 +686,13 @@ function buildRunFindings(run, limit = 10) {
       plugin: row.plugin || undefined,
       strategy: row.strategy || undefined,
       severity: row.severity || undefined,
+      // Honesty labels: a finding generated/transformed via the self-hosted fork of promptfoo's
+      // remote-only plugins/strategies (see generateSelfHostedProbe/generateSelfHostedStrategyTransform)
+      // needs to stay visibly distinguishable on the one artifact auditors actually read closely
+      // — a real vulnerability found via a single-shot strategy approximation carries different
+      // confidence than one found via upstream's real adaptive multi-turn attack.
+      source: row.source || undefined,
+      strategyApproximated: row.strategyApproximated || undefined,
     }));
 }
 
@@ -846,7 +853,11 @@ function buildMarkdownReport(report) {
     for (const finding of report.findings) {
       const tag = finding.severity ? ` [${finding.severity}]` : '';
       const attack = finding.plugin ? ` — ${finding.plugin}${finding.strategy ? `/${finding.strategy}` : ''}` : '';
-      lines.push(`- ${finding.status.toUpperCase()}${tag} ${finding.stageKey}: ${finding.test} (${finding.provider || 'provider'})${attack}`);
+      const provenance = [
+        finding.source === 'self-hosted-generated' ? 'self-hosted generated' : null,
+        finding.strategyApproximated ? 'strategy approximated' : null,
+      ].filter(Boolean).join(', ');
+      lines.push(`- ${finding.status.toUpperCase()}${tag} ${finding.stageKey}: ${finding.test} (${finding.provider || 'provider'})${attack}${provenance ? ` [${provenance}]` : ''}`);
       if (finding.error || finding.output) {
         lines.push(`  - ${markdownEscape(finding.error || finding.output).slice(0, 500)}`);
       }
@@ -899,6 +910,8 @@ function buildHtmlReport(report) {
       <article class="finding">
         <strong>${escapeHtml(finding.status.toUpperCase())}${finding.severity ? ` [${escapeHtml(finding.severity)}]` : ''} ${escapeHtml(finding.stageKey)} / ${escapeHtml(finding.test)}</strong>
         ${finding.plugin ? `<p class="finding-attack">${escapeHtml(finding.plugin)}${finding.strategy ? ` / ${escapeHtml(finding.strategy)}` : ''}</p>` : ''}
+        ${finding.source === 'self-hosted-generated' ? '<p class="finding-attack">self-hosted generated</p>' : ''}
+        ${finding.strategyApproximated ? '<p class="finding-attack">strategy approximated (single-shot, not upstream\'s stateful attack)</p>' : ''}
         <p>${escapeHtml(finding.error || finding.output || 'No output captured.')}</p>
       </article>`).join('')
     : '<p>No failing findings in latest runs.</p>';
@@ -6041,12 +6054,17 @@ function runsToCsv(runs) {
     'latency_ms',
     'error',
     'output',
+    // Empty for eval/model-audit rows and for local-template/real-generated red-team rows alike
+    // — populated only when this row's content came from the self-hosted remote-only-plugin
+    // generation fork, so a reader can tell at a glance which rows carry that provenance.
+    'source',
+    'strategy_approximated',
   ];
   const rows = [header];
   for (const run of runs) {
     const resultRows = Array.isArray(run.results?.rows) ? run.results.rows : [];
     if (!resultRows.length) {
-      rows.push([run.id, run.stageKey, run.status, run.createdAt, '', '', '', '', run.error || '', '']);
+      rows.push([run.id, run.stageKey, run.status, run.createdAt, '', '', '', '', run.error || '', '', '', '']);
       continue;
     }
     for (const row of resultRows) {
@@ -6061,6 +6079,8 @@ function runsToCsv(runs) {
         row.latencyMs || '',
         row.error || '',
         row.output || '',
+        row.source || '',
+        row.strategyApproximated ? 'true' : '',
       ]);
     }
   }
