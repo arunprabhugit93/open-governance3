@@ -287,6 +287,38 @@ export interface TargetReport {
     strategy?: string;
     severity?: string;
   }>;
+  frameworkCompliance: {
+    pluginPassRateThreshold: number;
+    redTeamRunsConsidered: number;
+    frameworksEvaluated: number;
+    frameworksCompliant: number;
+    totalFrameworks: number;
+    categoryStats: Record<string, { pass: number; total: number; failCount: number }>;
+    frameworks: Record<string, {
+      id: string;
+      name: string;
+      // null = no evidence yet for this framework (distinct from true/false)
+      isCompliant: boolean | null;
+      severity: string | null;
+      totalPlugins: number;
+      pluginsWithData: number;
+      untestedPluginCount: number;
+      compliantPluginCount: number;
+      nonCompliantPlugins: string[];
+      attackSuccessRate: number | null;
+      totalTests: number;
+      failedTests: number;
+      controls: Record<string, {
+        controlId: string;
+        controlName: string | null;
+        plugins: string[];
+        strategies: string[];
+        compliant: string[];
+        nonCompliant: string[];
+        untested: string[];
+      }>;
+    }>;
+  };
   engineConfigYaml: string;
 }
 

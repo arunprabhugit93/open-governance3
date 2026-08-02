@@ -3530,6 +3530,7 @@ function EvidenceWorkspace({
   const [rerunMode, setRerunMode] = useState<'failures' | 'errors' | 'all'>('failures');
   const [runBusy, setRunBusy] = useState('');
   const [error, setError] = useState('');
+  const [expandedFramework, setExpandedFramework] = useState<string | null>(null);
 
   async function loadEvidence() {
     setError('');
@@ -3769,6 +3770,91 @@ function EvidenceWorkspace({
               ))}
             </div>
           </>
+        ) : (
+          <p className="muted">Loading evidence...</p>
+        )}
+      </section>
+
+      <section className="subpanel">
+        <div className="subpanel-head">
+          <div>
+            <h3>Framework Compliance</h3>
+            <p className="muted">
+              Control-level mapping from red-team results to ISO 42001, EU AI Act, NIST AI RMF, OWASP LLM/API/Agentic
+              Top 10, MITRE ATLAS, GDPR, and DoD AI Ethics — computed from every red-team run this target has, not
+              just the latest one.
+            </p>
+          </div>
+          {report?.frameworkCompliance ? (
+            <span className="badge">
+              {report.frameworkCompliance.frameworksCompliant}/{report.frameworkCompliance.frameworksEvaluated} compliant
+              {report.frameworkCompliance.frameworksEvaluated < report.frameworkCompliance.totalFrameworks
+                ? ` · ${report.frameworkCompliance.totalFrameworks - report.frameworkCompliance.frameworksEvaluated} not evaluated`
+                : ''}
+            </span>
+          ) : null}
+        </div>
+        {report?.frameworkCompliance ? (
+          report.frameworkCompliance.redTeamRunsConsidered === 0 ? (
+            <p className="muted">No red-team runs yet for this target — run red-team to populate framework compliance evidence.</p>
+          ) : (
+            <div className="results-table">
+              {Object.values(report.frameworkCompliance.frameworks).map((fw) => {
+                const isOpen = expandedFramework === fw.id;
+                const statusLabel = fw.isCompliant === null ? 'Not evaluated' : fw.isCompliant ? 'Compliant' : 'Non-compliant';
+                const statusClass = fw.isCompliant === null ? '' : fw.isCompliant ? 'result-pass' : 'result-fail';
+                const asrLabel = fw.attackSuccessRate === null ? 'N/A' : `${Math.round(fw.attackSuccessRate * 10) / 10}%`;
+                return (
+                  <div className="result-row" key={fw.id}>
+                    <span className={statusClass || undefined}>
+                      {statusLabel}
+                      {fw.severity ? ` · ${fw.severity}` : ''}
+                    </span>
+                    <strong>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => setExpandedFramework(isOpen ? null : fw.id)}
+                      >
+                        {fw.name}
+                      </button>
+                      <span className="muted">
+                        {' '}
+                        ({fw.pluginsWithData}/{fw.totalPlugins} plugins tested · {fw.nonCompliantPlugins.length} non-compliant ·{' '}
+                        {fw.untestedPluginCount} untested · {asrLabel} attack success rate)
+                      </span>
+                    </strong>
+                    {isOpen ? (
+                      <div className="control-breakdown">
+                        {Object.values(fw.controls).map((control) => (
+                          <div key={control.controlId} className="control-row">
+                            <span className="muted">
+                              {control.controlId}
+                              {control.controlName ? ` — ${control.controlName}` : ''}
+                            </span>
+                            <div className="plugin-pills">
+                              {control.compliant.map((plugin) => (
+                                <span key={plugin} className="pill pill-pass">{plugin}</span>
+                              ))}
+                              {control.nonCompliant.map((plugin) => (
+                                <span key={plugin} className="pill pill-fail">{plugin}</span>
+                              ))}
+                              {control.untested.map((plugin) => (
+                                <span key={plugin} className="pill pill-muted">{plugin}</span>
+                              ))}
+                              {!control.compliant.length && !control.nonCompliant.length && !control.untested.length ? (
+                                <span className="muted">No plugins mapped to this control.</span>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )
         ) : (
           <p className="muted">Loading evidence...</p>
         )}
