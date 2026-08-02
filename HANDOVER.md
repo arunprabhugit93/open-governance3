@@ -3832,3 +3832,65 @@ this loop, not an unlimited test double.
       disabled the judge again afterward, confirmed the baseline
       passes as before. `tsc --noEmit` and the production `vite build`
       both passed clean.
+
+## Change log — iteration 76 (eval: explicit RAG context resolution for context-* assertions)
+
+94. Closed out the last unimplemented piece of the AssertionSchema
+    audit from earlier this session: real promptfoo's
+    `context-recall`/`context-relevance`/`context-faithfulness`
+    assertions require a resolved "context" value — either a
+    `context` test var (string or string array) or
+    `assertion.contextTransform` (a JS expression extracting it from
+    the output/response) — and throw a clear, specific error if
+    neither is available (`assertions/contextUtils.ts`
+    `resolveContext`). This product's `evaluateModelGradedAssertion`
+    treated these 3 RAG-specific assertion types identically to every
+    other model-graded type: no dedicated context extraction, no
+    `contextTransform` support at all, and no clear failure when no
+    context existed — the judge was just left to guess from an
+    undifferentiated vars dump, and `context` var (if present) was
+    just one more key buried in that dump rather than a distinctly
+    labeled field.
+    - Added `resolveRagContext()`: checks `vars.context` first
+      (joining a string array with blank lines, matching real
+      promptfoo), then `assertion.contextTransform` (reusing the
+      existing `applyOutputTransform` sandboxed-eval mechanism — no
+      new evaluation code needed), else returns a clear error rather
+      than throwing, so the caller can turn it into a normal graceful
+      assertion failure instead of a crash.
+    - Wired it into `evaluateModelGradedAssertion` as a required
+      pre-step for these 3 types specifically, before either the real
+      judge OR local-heuristic grading path — both were previously
+      equally blind to whether context existed at all.
+    - `modelGradedPrompt()` now includes the resolved context as its
+      own explicitly-labeled `context` field for these 3 types (not
+      buried in `vars`), matching real promptfoo's design intent that
+      context resolution is a first-class, required step.
+    - Preserved `contextTransform` through `normalizeAssertions`
+      (same root cause as `metric`/`transform`/`config` in earlier
+      iterations this session).
+    - Added a conditional "Context extraction (JS expression)" field
+      to the assertion editor, shown for the 3 context-* assertion
+      types.
+    - Verified live against the real E2E reference target across 3
+      distinct scenarios, all via the actual REST API: (1) a
+      context-faithfulness assertion with NEITHER a context var nor a
+      contextTransform correctly failed with
+      `evaluator: "context-resolution"` and the exact expected error
+      message — no crash, no silent pass; (2) the same assertion with
+      a real `context` var set correctly resolved (no error) and
+      proceeded to grading (`evaluator: "local-rubric"`, judge
+      disabled by default); (3) the same assertion with a
+      `contextTransform` expression extracting from `output` also
+      resolved correctly and proceeded to grading, and — to prove the
+      expression is genuinely evaluated rather than silently
+      ignored — a deliberately broken `contextTransform`
+      (`nonexistentVariable.someProperty`) correctly threw a real
+      `ReferenceError` that was caught and surfaced as the exact
+      expected `context-resolution` failure message. Restored the
+      target's original single-assertion config byte-for-byte
+      afterward (including re-confirming an accidental `vars: {}` vs.
+      no `vars` key discrepancy from an intermediate restore attempt,
+      caught and corrected before finalizing) and confirmed the
+      baseline passes as before. `tsc --noEmit` and the production
+      `vite build` both passed clean.

@@ -568,6 +568,10 @@ function normalizeAssertions(assertions, fallbackType = 'contains', fallbackValu
         // The eval workspace UI edits this as raw JSON text (same pattern as provider
         // libraryConfig elsewhere in this file), so accept either shape here.
         config: parseAssertionConfig(assertion.config),
+        // Real promptfoo's context-recall/context-relevance/context-faithfulness assertions
+        // require a resolved "context" value — either a `context` test var or this JS
+        // expression extracting it from the output/response (assertions/contextUtils.ts).
+        contextTransform: assertion.contextTransform,
       }))
       .filter((assertion) => assertion.type);
   }
@@ -1905,6 +1909,40 @@ function parseJudgeResult(value, threshold) {
   }
 }
 
+const RAG_CONTEXT_ASSERTION_TYPES = new Set(['context-recall', 'context-relevance', 'context-faithfulness']);
+
+// Real promptfoo's resolveContext() (assertions/contextUtils.ts): a `context` test var (string
+// or string array) wins if present, else assertion.contextTransform extracts it from the
+// output/response, else these assertion types have nothing to grade against at all and must
+// fail clearly rather than let the judge guess from an unlabeled vars dump. Returns
+// { context: string } on success or { error: string } — never throws, so callers can turn a
+// missing/failed context into a normal graceful assertion failure.
+function resolveRagContext(assertion, output, context) {
+  const varsContext = context.vars?.context;
+  if (typeof varsContext === 'string' && varsContext.trim()) {
+    return { context: varsContext };
+  }
+  if (Array.isArray(varsContext) && varsContext.length && varsContext.every((item) => typeof item === 'string')) {
+    return { context: varsContext.join('\n\n') };
+  }
+  if (assertion.contextTransform) {
+    try {
+      const transformed = applyOutputTransform(output, assertion.contextTransform, context);
+      if (typeof transformed === 'string' && transformed.trim()) {
+        return { context: transformed };
+      }
+      return { error: `contextTransform must return a non-empty string. Got: ${JSON.stringify(transformed)}` };
+    } catch (error) {
+      return { error: `Failed to transform context using expression '${assertion.contextTransform}': ${error.message}` };
+    }
+  }
+  return {
+    error:
+      'Context is required for context-based assertions. Provide either a "context" variable ' +
+      '(string or array of strings) in this test case\'s vars, or a "Context extraction" expression.',
+  };
+}
+
 function modelGradedPrompt(assertionType, output, assertion, context) {
   const criterion = assertion.value || assertion.expected || assertion.rubric || '';
   // Real promptfoo's test.options.rubricPrompt fully replaces the default grading prompt
@@ -1928,6 +1966,12 @@ function modelGradedPrompt(assertionType, output, assertion, context) {
       prompt: context.prompt || '',
       vars: context.vars || {},
       output: String(output || ''),
+      // Called out as its own field (not buried in `vars`) for the RAG assertion types, whose
+      // whole point is grading against a specific retrieved context — matches real promptfoo
+      // treating context resolution as a first-class, required step for these assertion types.
+      ...(RAG_CONTEXT_ASSERTION_TYPES.has(assertionType) && context.resolvedRagContext !== undefined
+        ? { context: context.resolvedRagContext }
+        : {}),
     },
     null,
     2,
@@ -1936,6 +1980,17 @@ function modelGradedPrompt(assertionType, output, assertion, context) {
 
 async function evaluateModelGradedAssertion(assertionType, output, assertion, context) {
   const threshold = assertionThreshold(assertion, 0.6);
+  // These 3 assertion types have nothing meaningful to grade without a resolved "context" — fail
+  // clearly up front (matches real promptfoo's own required-context invariant) instead of
+  // silently falling through to either grading path with the judge left to guess from a vars
+  // dump, or a local-rubric heuristic that never even looks at context in the first place.
+  if (RAG_CONTEXT_ASSERTION_TYPES.has(assertionType)) {
+    const resolved = resolveRagContext(assertion, output, context);
+    if (resolved.error) {
+      return { pass: false, score: 0, error: resolved.error, evaluator: 'context-resolution' };
+    }
+    context = { ...context, resolvedRagContext: resolved.context };
+  }
   const judge = judgeConfigForTarget(context.target);
   if (!judge || !judge.baseUrl || !judge.model || judge.adapter === 'adapter-required') {
     const assessment = keywordRubricScore(output, assertion.value || assertion.expected || '');

@@ -2056,6 +2056,17 @@ function EvalWorkspace({
                         title="Custom parameters available inside the expression as `config` (or context.config) — lets one script be reused across assertions with different settings."
                       />
                     ) : null}
+                    {['context-recall', 'context-relevance', 'context-faithfulness'].includes(assertion.type) ? (
+                      <input
+                        value={assertion.contextTransform || ''}
+                        onChange={(event) =>
+                          updateTestCaseAssertion(index, assertionIndex, { contextTransform: event.target.value || undefined })
+                        }
+                        placeholder={'Context extraction (JS expression) — e.g. vars.retrievedDocs.join("\\n\\n")'}
+                        title={'Extracts the retrieved context this assertion grades against, from `output`/`vars`/`rawResponse`. ' +
+                          'Not needed if a `context` var is already set on this test case — that takes priority. Required either way, or this assertion fails clearly instead of guessing.'}
+                      />
+                    ) : null}
                     {assertion.type === 'assert-set' ? (
                       <div className="assertion-subset">
                         <p className="field-help">

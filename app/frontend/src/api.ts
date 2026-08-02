@@ -38,6 +38,9 @@ export interface EvalAssertion {
   // Raw JSON text, parsed server-side (same pattern as provider libraryConfig) — passed to
   // javascript/python assertions as `config`/`context.config`.
   config?: string;
+  // JS expression extracting the retrieved context for context-recall/context-relevance/
+  // context-faithfulness assertions, when a `context` test var isn't already set.
+  contextTransform?: string;
   assert?: Array<{ type: string; value: string; weight?: number; metric?: string }>;
 }
 
