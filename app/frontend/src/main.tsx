@@ -2483,6 +2483,7 @@ function RedTeamWorkspace({
     setMessage(`Added ${generateAssertionsPreview.length} generated assertion(s) to defaults — remember to save.`);
   }
   const [entities, setEntities] = useState((redteam.entities || []).join(', '));
+  const [policyText, setPolicyText] = useState(redteam.pluginConfig?.policy || '');
   const [dataClassification, setDataClassification] = useState(runtime.dataClassification || '');
   const [allowedTools, setAllowedTools] = useState((runtime.allowedTools || []).join(', '));
   const [retrievalSources, setRetrievalSources] = useState((runtime.retrievalSources || []).join(', '));
@@ -2554,6 +2555,7 @@ function RedTeamWorkspace({
         assert: defaultAssertRows.filter((row) => row.type),
       },
       entities: parseInlineList(entities),
+      pluginConfig: { policy: policyText.trim() },
       customProbes: customProbes.filter((probe) => probe.prompt.trim()),
       dataClassification,
       allowedTools: parseInlineList(allowedTools),
@@ -2887,6 +2889,20 @@ function RedTeamWorkspace({
               </label>
             ))}
           </div>
+          {plugins.includes('policy') ? (
+            <div className="field">
+              <label>Custom policy statement</label>
+              <textarea
+                value={policyText}
+                onChange={(event) => setPolicyText(event.target.value)}
+                placeholder={'e.g. "The assistant must never provide specific medical dosage recommendations."'}
+              />
+              <p className="field-help">
+                Required by the "Policy" plugin — it generates and grades probes specifically against this statement
+                instead of a generic policy-bypass attempt. Leave blank to fall back to a generic placeholder policy.
+              </p>
+            </div>
+          ) : null}
         </section>
 
         <section className="subpanel">

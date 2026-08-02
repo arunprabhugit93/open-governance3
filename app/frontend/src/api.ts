@@ -192,6 +192,12 @@ export interface RedTeamStageConfigPayload {
     assert?: Array<{ type: string; value: string }>;
   };
   entities: string[];
+  // Real promptfoo's per-plugin config (PluginConfigSchema has ~30 mostly coding-agent-specific
+  // fields) — scoped here to the one broadly-applicable field: the "policy" plugin REQUIRES a
+  // custom policy statement to generate/grade against.
+  pluginConfig?: {
+    policy?: string;
+  };
   customProbes?: Array<{
     name: string;
     plugin: string;

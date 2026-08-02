@@ -3669,3 +3669,57 @@ this loop, not an unlimited test double.
       the production `vite build` both passed clean. No target config
       was mutated this iteration (read-only run against the existing
       saved config), so nothing needed restoring.
+
+## Change log — iteration 73 (red-team: custom policy text for the "policy" plugin)
+
+91. A different class of gap than the last several iterations: not a
+    field silently dropped by normalization, but an entire, genuinely
+    required real-promptfoo capability this product had zero
+    mechanism for at all. Real promptfoo's `policy` plugin *requires*
+    a custom `pluginConfig.policy` statement — `invariant(config.policy,
+    'A "policy" property is required for the policy plugin.')` — and
+    both generates AND grades its probes specifically against that
+    exact text (its grader rubric templates `{{policy}}` directly).
+    It's one of promptfoo's flagship compliance-testing features (e.g.
+    "the assistant must never provide specific medical dosage
+    recommendations"). This product had no per-plugin config mechanism
+    whatsoever — selecting "Policy Compliance" in the plugin list
+    generated a fixed, generic "bypass policy" probe with no
+    connection to any actual policy statement, so the plugin could
+    never test what it exists to test.
+    - Added a minimal `redteam.pluginConfig.policy` field (PATCH-able,
+      merged non-destructively like every other field on this route),
+      deliberately scoped to just this one field rather than
+      attempting real promptfoo's full ~30-field `PluginConfigSchema`
+      (which is mostly coding-agent-specific and not relevant to this
+      product's plugin set).
+    - `buildRedTeamCasesLocal` now builds the `policy` plugin's probe
+      around the actual configured statement (falling back to a
+      generic placeholder, not a crash, when unset — consistent with
+      this codebase's established graceful-degradation preference).
+    - Threaded the same text into `gradeWithRealGrader`'s
+      `test.metadata.policy` — required for the real grader wired up
+      in iteration 71 to render its `{{policy}}` rubric variable
+      instead of crashing on undefined, the same class of fix as
+      iteration 71's `{{value}}` bug.
+    - Added a conditional "Custom policy statement" textarea to the
+      Red Team workspace, shown only when the `policy` plugin is
+      selected (mirrors the existing pattern of conditional fields
+      elsewhere in this editor, e.g. assert-set's threshold input).
+      Extended `RedTeamStageConfigPayload` in `api.ts`.
+    - Verified live, fully end-to-end, against the real Groq-backed
+      E2E reference target: configured the target with only the
+      `policy` plugin and a concrete custom statement ("The assistant
+      must never provide specific medical dosage recommendations."),
+      ran a real red-team probe, and confirmed (a) the generated
+      probe's prompt genuinely embedded that exact statement instead
+      of the old generic text, and (b) grading succeeded end-to-end
+      with `grader: "promptfoo-library"` — the real judge's
+      `{{policy}}` template rendered correctly rather than crashing,
+      proving the full chain (UI → saved config → probe generation →
+      real-grader rubric rendering) works together. Restored the
+      target's original plugins/strategies/numTests afterward
+      (`pluginConfig` itself is now a permanent, harmless addition to
+      the target's schema going forward, same as every other
+      newly-introduced field this session). `tsc --noEmit` and the
+      production `vite build` both passed clean.
