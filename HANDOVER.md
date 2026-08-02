@@ -4044,3 +4044,46 @@ this loop, not an unlimited test double.
       original eval metadata (test cases AND providers, since
       `/import` replaces both) afterward and confirmed the baseline
       eval run still passes cleanly.
+
+## Change log — iteration 80 (red team: fix numTests silently dropping plugin coverage in local generator)
+
+98. Found while closing a gap flagged by the user directly: they asked
+    whether "verified end to end" for the newly-added NVIDIA/Gemini
+    providers actually included red-team and model-audit, not just
+    eval — it didn't, so I ran both live against the Gemini provider
+    to close it out, and hit this bug doing so.
+    `buildRedTeamCasesLocal()` (the no-LLM fallback template generator
+    used whenever `useRealGeneration` is off or real generation isn't
+    available) had `if (rows.length >= numTests) break;` inside BOTH
+    the outer plugin loop and the inner strategy loop. Real promptfoo
+    documents `numTests` as a per-plugin multiplier — total tests =
+    `numTests * plugins.length * (1 + strategies.length)` — so it only
+    ever scales coverage up. This local generator's early-break did
+    the opposite: with `numTests: 2` and 4 plugins x 2 strategies
+    selected, it produced cases for only the FIRST plugin (2 rows) and
+    silently dropped the other 3 plugins entirely, with no error,
+    warning, or indication in the run result that 3 of 4 explicitly
+    selected plugins were never even attempted.
+    - Removed the `rows.length >= numTests` break from both loops.
+      This generator has exactly one deterministic template per
+      plugin (no LLM to produce numTests distinct variants per
+      combo), so `numTests` is no longer consulted here at all —
+      every selected plugin x strategy pair always gets exactly one
+      row, guaranteeing full coverage of whatever the user picked.
+      Dropped the now-unused `numTests` parameter from
+      `buildRedTeamCasesLocal()`'s signature and call site rather than
+      leave a dead parameter. (`numTests` remains fully honored on the
+      real-generation path, `generateRealRedTeamCases()`, which passes
+      it straight through to real promptfoo's own plugin generators.)
+    - Verified live against the real E2E reference target: configured
+      4 plugins (`harmful:hate`, `pii:direct`, `excessive-agency`,
+      `hijacking`) x 2 strategies (`jailbreak`, `prompt-injection`)
+      with `numTests: 2`, live against Gemini
+      (`gemini-flash-latest`) as the target model. Before the fix:
+      2 rows, 1 plugin. After the fix: 8 rows, `plugins: 4` in the run
+      summary — full coverage. Also ran model-audit against the same
+      target (confirmed it's provider-independent, scans static
+      artifact metadata) and reconfirmed clean. Restored the target's
+      original single-Groq-provider eval config and cleared the
+      red-team plugins/strategies back to empty afterward; baseline
+      eval still passes.
