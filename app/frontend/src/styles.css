@@ -630,13 +630,6 @@ h3 {
   gap: 16px;
 }
 
-.evidence-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(330px, 0.45fr);
-  gap: 16px;
-  align-items: start;
-}
-
 .subpanel {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1142,6 +1135,232 @@ h3 {
   color: var(--muted);
 }
 
+.result-neutral {
+  display: inline-flex;
+  align-items: center;
+  align-self: start;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 900;
+  background: var(--panel-muted, #f5f6f8);
+  color: var(--muted);
+}
+
+/* Evidence workspace: overview + tabbed drilldown ------------------------ */
+
+.evidence-page {
+  display: grid;
+  gap: 16px;
+}
+
+.evidence-overview {
+  border-top: 3px solid var(--blue);
+}
+
+.evidence-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 4px;
+}
+
+.evidence-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  min-height: 36px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 800;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.evidence-tab:hover {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.evidence-tab.active {
+  background: var(--blue);
+  color: #fff;
+}
+
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(23, 32, 51, 0.08);
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.evidence-tab.active .tab-count {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.evidence-panel {
+  animation: evidence-panel-in 0.14s ease;
+}
+
+@keyframes evidence-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.subpanel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.disclosure-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+/* Overview / drilldown accordion: one collapsed summary row per item, click
+   to expand a detail panel beneath it. Used by Compliance, Findings, and
+   Runs so every section follows the same "scan the summary, open what you
+   need" pattern instead of dumping every detail on screen at once. */
+.drilldown-list {
+  display: grid;
+  gap: 8px;
+}
+
+.drilldown-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+  transition: border-color 0.12s ease;
+}
+
+.drilldown-item.open {
+  border-color: var(--blue);
+}
+
+.drilldown-summary {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 10px 14px;
+  text-align: left;
+  font: inherit;
+}
+
+.drilldown-summary:hover {
+  background: var(--bg);
+}
+
+.drilldown-chevron {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.12s ease;
+}
+
+.drilldown-item.open .drilldown-chevron {
+  transform: rotate(90deg);
+}
+
+.drilldown-title {
+  min-width: 0;
+  font-weight: 800;
+  text-transform: none;
+}
+
+.drilldown-meta {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.control-breakdown {
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  padding: 12px 14px;
+}
+
+.finding-detail {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.run-drilldown-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.run-drilldown-summary {
+  flex: 1;
+  min-width: 0;
+}
+
+.run-drilldown-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+}
+
+@media (max-width: 860px) {
+  .drilldown-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+
+  .drilldown-meta {
+    grid-column: 2;
+    white-space: normal;
+  }
+
+  .run-drilldown-row {
+    flex-direction: column;
+  }
+
+  .run-drilldown-actions {
+    padding: 8px 14px 12px;
+  }
+}
+
 .definition-list {
   display: grid;
   gap: 8px;
@@ -1207,7 +1426,6 @@ h3 {
   .layout,
   .detail-layout,
   .eval-builder,
-  .evidence-grid,
   .assertion-row,
   .assertion-row-main,
   .assertion-subrow,

@@ -3531,6 +3531,9 @@ function EvidenceWorkspace({
   const [runBusy, setRunBusy] = useState('');
   const [error, setError] = useState('');
   const [expandedFramework, setExpandedFramework] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'compliance' | 'findings' | 'runs' | 'schedules' | 'compare'>('compliance');
+  const [expandedFinding, setExpandedFinding] = useState<string | null>(null);
+  const [showScheduleForm, setShowScheduleForm] = useState(false);
 
   async function loadEvidence() {
     setError('');
@@ -3671,6 +3674,15 @@ function EvidenceWorkspace({
     }
   }
 
+  async function toggleRunTrace(runId: string) {
+    if (selectedRun?.id === runId) {
+      setSelectedRun(null);
+      setTrace([]);
+      return;
+    }
+    await inspectRun(runId);
+  }
+
   async function handleRerun(runId: string) {
     if (isViewer) return;
     setError('');
@@ -3728,12 +3740,24 @@ function EvidenceWorkspace({
     }
   }
 
+  const complianceCount = report?.frameworkCompliance
+    ? `${report.frameworkCompliance.frameworksCompliant}/${report.frameworkCompliance.frameworksEvaluated}`
+    : null;
+  const findingsCount = report?.findings.length ?? null;
+  const TABS: Array<{ key: typeof activeTab; label: string; count: string | number | null }> = [
+    { key: 'compliance', label: 'Compliance', count: complianceCount },
+    { key: 'findings', label: 'Findings', count: findingsCount },
+    { key: 'runs', label: 'Runs', count: runs.length || null },
+    { key: 'schedules', label: 'Schedules', count: schedules.length || null },
+    { key: 'compare', label: 'Compare', count: null },
+  ];
+
   return (
-    <div className="evidence-grid">
-      <section className="subpanel">
+    <div className="evidence-page">
+      <section className="subpanel evidence-overview">
         <div className="subpanel-head">
           <div>
-            <h3>Scorecard</h3>
+            <h3>Overview</h3>
             <p className="muted">Latest eval, red-team, and model-audit outcomes rolled up for this target.</p>
           </div>
           <button className="secondary-button" type="button" onClick={loadEvidence}>
@@ -3775,207 +3799,257 @@ function EvidenceWorkspace({
         )}
       </section>
 
-      <section className="subpanel">
-        <div className="subpanel-head">
-          <div>
-            <h3>Framework Compliance</h3>
-            <p className="muted">
-              Control-level mapping from red-team results to ISO 42001, EU AI Act, NIST AI RMF, OWASP LLM/API/Agentic
-              Top 10, MITRE ATLAS, GDPR, and DoD AI Ethics — computed from every red-team run this target has, not
-              just the latest one.
-            </p>
+      <nav className="evidence-tabs" role="tablist" aria-label="Evidence sections">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            className={activeTab === tab.key ? 'evidence-tab active' : 'evidence-tab'}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+            {tab.count !== null ? <span className="tab-count">{tab.count}</span> : null}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === 'compliance' ? (
+        <section className="subpanel evidence-panel">
+          <div className="subpanel-head">
+            <div>
+              <h3>Framework Compliance</h3>
+              <p className="muted">
+                Control-level mapping from red-team results to ISO 42001, EU AI Act, NIST AI RMF, OWASP LLM/API/Agentic
+                Top 10, MITRE ATLAS, GDPR, and DoD AI Ethics — computed from every red-team run this target has, not
+                just the latest one.
+              </p>
+            </div>
+            {report?.frameworkCompliance ? (
+              <span className="badge">
+                {report.frameworkCompliance.frameworksCompliant}/{report.frameworkCompliance.frameworksEvaluated} compliant
+                {report.frameworkCompliance.frameworksEvaluated < report.frameworkCompliance.totalFrameworks
+                  ? ` · ${report.frameworkCompliance.totalFrameworks - report.frameworkCompliance.frameworksEvaluated} not evaluated`
+                  : ''}
+              </span>
+            ) : null}
           </div>
           {report?.frameworkCompliance ? (
-            <span className="badge">
-              {report.frameworkCompliance.frameworksCompliant}/{report.frameworkCompliance.frameworksEvaluated} compliant
-              {report.frameworkCompliance.frameworksEvaluated < report.frameworkCompliance.totalFrameworks
-                ? ` · ${report.frameworkCompliance.totalFrameworks - report.frameworkCompliance.frameworksEvaluated} not evaluated`
-                : ''}
-            </span>
-          ) : null}
-        </div>
-        {report?.frameworkCompliance ? (
-          report.frameworkCompliance.redTeamRunsConsidered === 0 ? (
-            <p className="muted">No red-team runs yet for this target — run red-team to populate framework compliance evidence.</p>
-          ) : (
-            <div className="results-table">
-              {Object.values(report.frameworkCompliance.frameworks).map((fw) => {
-                const isOpen = expandedFramework === fw.id;
-                const statusLabel = fw.isCompliant === null ? 'Not evaluated' : fw.isCompliant ? 'Compliant' : 'Non-compliant';
-                const statusClass = fw.isCompliant === null ? '' : fw.isCompliant ? 'result-pass' : 'result-fail';
-                const asrLabel = fw.attackSuccessRate === null ? 'N/A' : `${Math.round(fw.attackSuccessRate * 10) / 10}%`;
-                return (
-                  <div className="result-row" key={fw.id}>
-                    <span className={statusClass || undefined}>
-                      {statusLabel}
-                      {fw.severity ? ` · ${fw.severity}` : ''}
-                    </span>
-                    <strong>
-                      <button
-                        type="button"
-                        className="link-button"
-                        onClick={() => setExpandedFramework(isOpen ? null : fw.id)}
-                      >
-                        {fw.name}
+            report.frameworkCompliance.redTeamRunsConsidered === 0 ? (
+              <p className="muted">No red-team runs yet for this target — run red-team to populate framework compliance evidence.</p>
+            ) : (
+              <div className="drilldown-list">
+                {Object.values(report.frameworkCompliance.frameworks).map((fw) => {
+                  const isOpen = expandedFramework === fw.id;
+                  const statusLabel = fw.isCompliant === null ? 'Not evaluated' : fw.isCompliant ? 'Compliant' : 'Non-compliant';
+                  const statusClass = fw.isCompliant === null ? 'result-neutral' : fw.isCompliant ? 'result-pass' : 'result-fail';
+                  const asrLabel = fw.attackSuccessRate === null ? 'N/A' : `${Math.round(fw.attackSuccessRate * 10) / 10}%`;
+                  return (
+                    <div className={isOpen ? 'drilldown-item open' : 'drilldown-item'} key={fw.id}>
+                      <button type="button" className="drilldown-summary" onClick={() => setExpandedFramework(isOpen ? null : fw.id)}>
+                        <span className="drilldown-chevron" aria-hidden="true" />
+                        <span className={statusClass}>
+                          {statusLabel}
+                          {fw.severity ? ` · ${fw.severity}` : ''}
+                        </span>
+                        <span className="drilldown-title">{fw.name}</span>
+                        <span className="muted drilldown-meta">
+                          {fw.pluginsWithData}/{fw.totalPlugins} plugins tested · {fw.nonCompliantPlugins.length} non-compliant ·{' '}
+                          {fw.untestedPluginCount} untested · {asrLabel} attack success rate
+                        </span>
                       </button>
-                      <span className="muted">
-                        {' '}
-                        ({fw.pluginsWithData}/{fw.totalPlugins} plugins tested · {fw.nonCompliantPlugins.length} non-compliant ·{' '}
-                        {fw.untestedPluginCount} untested · {asrLabel} attack success rate)
+                      {isOpen ? (
+                        <div className="control-breakdown">
+                          {Object.values(fw.controls).map((control) => (
+                            <div key={control.controlId} className="control-row">
+                              <span className="muted">
+                                {control.controlId}
+                                {control.controlName ? ` — ${control.controlName}` : ''}
+                              </span>
+                              <div className="plugin-pills">
+                                {control.compliant.map((plugin) => (
+                                  <span key={plugin} className="pill pill-pass">{plugin}</span>
+                                ))}
+                                {control.nonCompliant.map((plugin) => (
+                                  <span key={plugin} className="pill pill-fail">{plugin}</span>
+                                ))}
+                                {control.untested.map((plugin) => (
+                                  <span key={plugin} className="pill pill-muted">{plugin}</span>
+                                ))}
+                                {!control.compliant.length && !control.nonCompliant.length && !control.untested.length ? (
+                                  <span className="muted">No plugins mapped to this control.</span>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            <p className="muted">Loading evidence...</p>
+          )}
+        </section>
+      ) : null}
+
+      {activeTab === 'findings' ? (
+        <section className="subpanel evidence-panel">
+          <div className="subpanel-head">
+            <div>
+              <h3>Findings</h3>
+              <p className="muted">Failing or errored rows from the latest run of each stage.</p>
+            </div>
+            <span className="badge">{report?.findings.length ?? 0} findings</span>
+          </div>
+          <div className="drilldown-list">
+            {(report?.findings || []).length ? (
+              report!.findings.map((finding, index) => {
+                const key = `${finding.runId}-${finding.test}-${index}`;
+                const isOpen = expandedFinding === key;
+                return (
+                  <div className={isOpen ? 'drilldown-item open' : 'drilldown-item'} key={key}>
+                    <button type="button" className="drilldown-summary" onClick={() => setExpandedFinding(isOpen ? null : key)}>
+                      <span className="drilldown-chevron" aria-hidden="true" />
+                      <span className="result-fail">
+                        {finding.status.toUpperCase()}
+                        {finding.severity ? ` · ${finding.severity}` : ''}
                       </span>
-                    </strong>
+                      <span className="drilldown-title">
+                        {finding.stageKey.replace('_', ' ')} · {finding.test}
+                        {finding.plugin ? (
+                          <span className="muted"> ({finding.plugin}{finding.strategy ? `/${finding.strategy}` : ''})</span>
+                        ) : null}
+                      </span>
+                      {finding.source === 'self-hosted-generated' ? (
+                        <span className="pill pill-muted" title="Probe content generated by this deployment's own self-hosted model, not a hand-written template">
+                          self-hosted generated
+                        </span>
+                      ) : null}
+                      {finding.strategyApproximated ? (
+                        <span className="pill pill-muted" title="This strategy is normally a stateful/multi-turn attack upstream; approximated here as a single self-hosted transform">
+                          strategy approximated
+                        </span>
+                      ) : null}
+                    </button>
                     {isOpen ? (
                       <div className="control-breakdown">
-                        {Object.values(fw.controls).map((control) => (
-                          <div key={control.controlId} className="control-row">
-                            <span className="muted">
-                              {control.controlId}
-                              {control.controlName ? ` — ${control.controlName}` : ''}
-                            </span>
-                            <div className="plugin-pills">
-                              {control.compliant.map((plugin) => (
-                                <span key={plugin} className="pill pill-pass">{plugin}</span>
-                              ))}
-                              {control.nonCompliant.map((plugin) => (
-                                <span key={plugin} className="pill pill-fail">{plugin}</span>
-                              ))}
-                              {control.untested.map((plugin) => (
-                                <span key={plugin} className="pill pill-muted">{plugin}</span>
-                              ))}
-                              {!control.compliant.length && !control.nonCompliant.length && !control.untested.length ? (
-                                <span className="muted">No plugins mapped to this control.</span>
-                              ) : null}
-                            </div>
-                          </div>
-                        ))}
+                        <p className="finding-detail">{finding.error || finding.output || 'No output captured.'}</p>
                       </div>
                     ) : null}
                   </div>
                 );
-              })}
+              })
+            ) : (
+              <p className="muted">No failing findings in the latest runs.</p>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'schedules' ? (
+        <section className="subpanel evidence-panel">
+          <div className="subpanel-head">
+            <div>
+              <h3>Schedules</h3>
+              <p className="muted">Recurring assurance runs for selected stages.</p>
             </div>
-          )
-        ) : (
-          <p className="muted">Loading evidence...</p>
-        )}
-      </section>
-
-      <section className="subpanel">
-        <h3>Findings</h3>
-        <div className="results-table">
-          {(report?.findings || []).length ? (
-            report!.findings.map((finding, index) => (
-              <div className="result-row" key={`${finding.runId}-${finding.test}-${index}`}>
-                <span className="result-fail">
-                  {finding.status.toUpperCase()}
-                  {finding.severity ? ` · ${finding.severity}` : ''}
-                </span>
-                <strong>
-                  {finding.stageKey.replace('_', ' ')} · {finding.test}
-                  {finding.plugin ? (
-                    <span className="muted"> ({finding.plugin}{finding.strategy ? `/${finding.strategy}` : ''})</span>
-                  ) : null}
-                  {finding.source === 'self-hosted-generated' ? (
-                    <span className="pill pill-muted" title="Probe content generated by this deployment's own self-hosted model, not a hand-written template">
-                      {' '}self-hosted generated
-                    </span>
-                  ) : null}
-                  {finding.strategyApproximated ? (
-                    <span className="pill pill-muted" title="This strategy is normally a stateful/multi-turn attack upstream; approximated here as a single self-hosted transform">
-                      {' '}strategy approximated
-                    </span>
-                  ) : null}
-                </strong>
-                <p>{finding.error || finding.output || 'No output captured.'}</p>
+            <div className="subpanel-head-actions">
+              <span className="badge">{schedules.length} schedules</span>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isViewer}
+                title={viewerTitle}
+                onClick={() => setShowScheduleForm((current) => !current)}
+              >
+                {showScheduleForm ? 'Cancel' : '+ New schedule'}
+              </button>
+            </div>
+          </div>
+          {showScheduleForm ? (
+            <div className="disclosure-panel">
+              <div className="form-grid">
+                <div className="field">
+                  <label>Name</label>
+                  <input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Every minutes</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={scheduleInterval}
+                    onChange={(event) => setScheduleInterval(Number(event.target.value || 1))}
+                  />
+                </div>
               </div>
-            ))
-          ) : (
-            <p className="muted">No failing findings in the latest runs.</p>
-          )}
-        </div>
-      </section>
-
-      <section className="subpanel">
-        <div className="subpanel-head">
-          <div>
-            <h3>Schedules</h3>
-            <p className="muted">Recurring assurance runs for selected stages.</p>
-          </div>
-          <span className="badge">{schedules.length} schedules</span>
-        </div>
-        <div className="form-grid">
-          <div className="field">
-            <label>Name</label>
-            <input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} />
-          </div>
-          <div className="field">
-            <label>Every minutes</label>
-            <input
-              type="number"
-              min="1"
-              value={scheduleInterval}
-              onChange={(event) => setScheduleInterval(Number(event.target.value || 1))}
-            />
-          </div>
-        </div>
-        <div className="option-grid compact">
-          {([
-            ['eval', 'Eval'],
-            ['red_team', 'Red team'],
-            ['model_audit', 'Model audit'],
-          ] as const).map(([stageKey, label]) => (
-            <label className="check-option" key={stageKey}>
-              <input
-                type="checkbox"
-                checked={scheduleStages.includes(stageKey)}
-                onChange={() => setScheduleStages(toggleValue(scheduleStages, stageKey) as Array<'eval' | 'red_team' | 'model_audit'>)}
-              />
-              <span>{label}</span>
-            </label>
-          ))}
-        </div>
-        <div className="field">
-          <label>Run options JSON</label>
-          <textarea value={scheduleRunOptions} onChange={(event) => setScheduleRunOptions(event.target.value)} />
-        </div>
-        <div className="form-grid">
-          <div className="field span-2">
-            <label>Notify webhook URL (optional)</label>
-            <input
-              type="url"
-              value={scheduleWebhookUrl}
-              onChange={(event) => setScheduleWebhookUrl(event.target.value)}
-              placeholder="https://hooks.example.com/assurance-alerts"
-            />
-            <p className="field-help">
-              POSTs a JSON summary here when a scheduled run finishes — use it to wire this into Slack, PagerDuty,
-              or a CI pipeline via a small relay.
-            </p>
-          </div>
-          <div className="field">
-            <label>Notify on</label>
-            <select value={scheduleNotifyOn} onChange={(event) => setScheduleNotifyOn(event.target.value as 'failure' | 'always')}>
-              <option value="failure">Failures only</option>
-              <option value="always">Every run</option>
-            </select>
-          </div>
-        </div>
-        <label className="inline-check">
-          <input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} />
-          <span>Enabled</span>
-        </label>
-        <div className="stage-actions">
-          <button
-            className="primary-button"
-            type="button"
-            disabled={isViewer || !scheduleName.trim() || !scheduleStages.length || Boolean(scheduleBusy)}
-            title={viewerTitle}
-            onClick={handleCreateSchedule}
-          >
-            {scheduleBusy === 'create' ? 'Saving...' : 'Create schedule'}
-          </button>
-        </div>
-        <div className="schedule-list">
+              <div className="option-grid compact">
+                {([
+                  ['eval', 'Eval'],
+                  ['red_team', 'Red team'],
+                  ['model_audit', 'Model audit'],
+                ] as const).map(([stageKey, label]) => (
+                  <label className="check-option" key={stageKey}>
+                    <input
+                      type="checkbox"
+                      checked={scheduleStages.includes(stageKey)}
+                      onChange={() => setScheduleStages(toggleValue(scheduleStages, stageKey) as Array<'eval' | 'red_team' | 'model_audit'>)}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="field">
+                <label>Run options JSON</label>
+                <textarea value={scheduleRunOptions} onChange={(event) => setScheduleRunOptions(event.target.value)} />
+              </div>
+              <div className="form-grid">
+                <div className="field span-2">
+                  <label>Notify webhook URL (optional)</label>
+                  <input
+                    type="url"
+                    value={scheduleWebhookUrl}
+                    onChange={(event) => setScheduleWebhookUrl(event.target.value)}
+                    placeholder="https://hooks.example.com/assurance-alerts"
+                  />
+                  <p className="field-help">
+                    POSTs a JSON summary here when a scheduled run finishes — use it to wire this into Slack, PagerDuty,
+                    or a CI pipeline via a small relay.
+                  </p>
+                </div>
+                <div className="field">
+                  <label>Notify on</label>
+                  <select value={scheduleNotifyOn} onChange={(event) => setScheduleNotifyOn(event.target.value as 'failure' | 'always')}>
+                    <option value="failure">Failures only</option>
+                    <option value="always">Every run</option>
+                  </select>
+                </div>
+              </div>
+              <label className="inline-check">
+                <input type="checkbox" checked={scheduleEnabled} onChange={(event) => setScheduleEnabled(event.target.checked)} />
+                <span>Enabled</span>
+              </label>
+              <div className="stage-actions">
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={isViewer || !scheduleName.trim() || !scheduleStages.length || Boolean(scheduleBusy)}
+                  title={viewerTitle}
+                  onClick={async () => {
+                    await handleCreateSchedule();
+                    setShowScheduleForm(false);
+                  }}
+                >
+                  {scheduleBusy === 'create' ? 'Saving...' : 'Create schedule'}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <div className="schedule-list">
           {schedules.length ? (
             schedules.map((schedule) => (
               <div className="schedule-row" key={schedule.id}>
@@ -4038,208 +4112,212 @@ function EvidenceWorkspace({
           ) : (
             <p className="muted">No schedules configured.</p>
           )}
-        </div>
-      </section>
+          </div>
+        </section>
+      ) : null}
 
-      <section className="subpanel">
-        <div className="subpanel-head">
-          <div>
-            <h3>Run center</h3>
-            <p className="muted">
-              {runs.length >= 100
-                ? 'Showing the latest 100 matching runs — older runs exist but are not shown.'
-                : 'All stored runs for this target across stages.'}
-            </p>
-          </div>
-          <span className="badge">{runs.length} runs</span>
-        </div>
-        <div className="run-filters">
-          <div className="field">
-            <label>Stage</label>
-            <select value={runStageFilter} onChange={(event) => setRunStageFilter(event.target.value)}>
-              <option value="">All stages</option>
-              <option value="eval">Eval</option>
-              <option value="red_team">Red team</option>
-              <option value="model_audit">Model audit</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>Status</label>
-            <select value={runStatusFilter} onChange={(event) => setRunStatusFilter(event.target.value)}>
-              <option value="">All statuses</option>
-              <option value="completed">Completed</option>
-              <option value="failed">Failed</option>
-              <option value="running">Running</option>
-              <option value="cancelling">Cancelling</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>Outcome</label>
-            <select value={runOutcomeFilter} onChange={(event) => setRunOutcomeFilter(event.target.value)}>
-              <option value="">Any outcome</option>
-              <option value="pass">Has pass</option>
-              <option value="fail">Has fail</option>
-              <option value="error">Has error</option>
-              <option value="not_pass">Needs attention</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>Rerun mode</label>
-            <select value={rerunMode} onChange={(event) => setRerunMode(event.target.value as 'failures' | 'errors' | 'all')}>
-              <option value="failures">Failures and errors</option>
-              <option value="errors">Errors only</option>
-              <option value="all">All rows</option>
-            </select>
-          </div>
-        </div>
-        <div className="run-list">
-          {runs.map((run) => {
-            const summary = run.results?.summary;
-            return (
-              <div className="run-list-row" key={run.id}>
-                <div>
-                  <strong>{run.stageKey.replace('_', ' ')}</strong>
-                  <p className="muted">{new Date(run.createdAt).toLocaleString()}</p>
-                </div>
-                <span className="badge">{run.status}</span>
-                <span>{summary ? `${summary.pass}/${summary.total} pass` : 'No results'}</span>
-                <button className="secondary-button" type="button" onClick={() => inspectRun(run.id)}>
-                  Trace
-                </button>
-                <button className="secondary-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleRerun(run.id)}>
-                  Rerun
-                </button>
-                {['running', 'queued', 'cancelling'].includes(run.status) ? (
-                  <button className="danger-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleCancelRun(run.id)}>
-                    Cancel
-                  </button>
-                ) : null}
-                <button className="ghost-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleDeleteRun(run.id)}>
-                  Delete
-                </button>
-              </div>
-            );
-          })}
-          {runs.length ? null : <p className="muted">No runs match the selected filters.</p>}
-        </div>
-      </section>
-
-      <section className="subpanel">
-        <div className="subpanel-head">
-          <div>
-            <h3>Run trace</h3>
-            <p className="muted">
-              {selectedRun ? `${selectedRun.stageKey.replace('_', ' ')} · ${selectedRun.id}` : 'Select a run to inspect request and response rows.'}
-            </p>
-          </div>
-        </div>
-        <div className="trace-list">
-          {trace.length ? (
-            trace.map((row) => (
-              <div className="trace-row" key={`${row.index}-${row.test}`}>
-                <div className="trace-head">
-                  <span className={row.pass ? 'result-pass' : 'result-fail'}>{row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}</span>
-                  <strong>{row.test}</strong>
-                  <span className="muted">
-                    {row.latencyMs ? `${row.latencyMs} ms` : ''}
-                    {row.cacheHit ? ' (cached)' : ''}
-                  </span>
-                </div>
-                <dl className="definition-list">
-                  <dt>Prompt</dt>
-                  <dd>{row.prompt || 'No prompt captured'}</dd>
-                  <dt>Output</dt>
-                  <dd>{row.output || row.error || 'No output captured'}</dd>
-                  <dt>Assertions</dt>
-                  <dd>{row.assertions.length ? JSON.stringify(row.assertions) : 'No assertions captured'}</dd>
-                  {row.finishReason ? (
-                    <>
-                      <dt>Finish reason</dt>
-                      <dd>{row.finishReason}</dd>
-                    </>
-                  ) : null}
-                  {row.vars && Object.keys(row.vars).length ? (
-                    <>
-                      <dt>Variables</dt>
-                      <dd>{JSON.stringify(row.vars)}</dd>
-                    </>
-                  ) : null}
-                </dl>
-                {row.rawResponse !== undefined && row.rawResponse !== null ? (
-                  <details>
-                    <summary>View raw provider response</summary>
-                    <pre className="config-preview">
-                      {typeof row.rawResponse === 'string' ? row.rawResponse : JSON.stringify(row.rawResponse, null, 2)}
-                    </pre>
-                  </details>
-                ) : null}
-              </div>
-            ))
-          ) : (
-            <p className="muted">No trace selected.</p>
-          )}
-        </div>
-      </section>
-
-      <section className="subpanel">
-        <h3>Compare runs</h3>
-        <div className="form-grid">
-          <div className="field">
-            <label>Baseline</label>
-            <select value={leftRun} onChange={(event) => setLeftRun(event.target.value)}>
-              <option value="">Select run</option>
-              {runs.map((run) => (
-                <option value={run.id} key={run.id}>
-                  {run.stageKey} · {new Date(run.createdAt).toLocaleString()}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>Candidate</label>
-            <select value={rightRun} onChange={(event) => setRightRun(event.target.value)}>
-              <option value="">Select run</option>
-              {runs.map((run) => (
-                <option value={run.id} key={run.id}>
-                  {run.stageKey} · {new Date(run.createdAt).toLocaleString()}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="stage-actions">
-          <button className="primary-button" type="button" disabled={!leftRun || !rightRun || leftRun === rightRun} onClick={handleCompare}>
-            Compare
-          </button>
-        </div>
-        {comparison ? (
-          <>
-            <div className="run-summary">
-              <div><span>Pass delta</span><strong>{comparison.delta.pass}</strong></div>
-              <div><span>Fail delta</span><strong>{comparison.delta.fail}</strong></div>
-              <div><span>Error delta</span><strong>{comparison.delta.error}</strong></div>
-              <div><span>Changed</span><strong>{comparison.changed.length}</strong></div>
+      {activeTab === 'runs' ? (
+        <section className="subpanel evidence-panel">
+          <div className="subpanel-head">
+            <div>
+              <h3>Runs</h3>
+              <p className="muted">
+                {runs.length >= 100
+                  ? 'Showing the latest 100 matching runs — older runs exist but are not shown. Click a run to inspect its request/response trace.'
+                  : 'All stored runs for this target across stages. Click a run to inspect its request/response trace.'}
+              </p>
             </div>
-            {comparison.delta.namedScores && Object.keys(comparison.delta.namedScores).length ? (
-              <p className="muted">
-                Named score deltas:{' '}
-                {Object.entries(comparison.delta.namedScores)
-                  .map(([name, d]) => `${name}: ${d.left ?? '—'} → ${d.right ?? '—'} (${d.delta === null ? 'n/a' : (d.delta >= 0 ? '+' : '') + d.delta.toFixed(3)})`)
-                  .join(', ')}
-              </p>
-            ) : null}
-            {comparison.delta.derivedMetrics && Object.keys(comparison.delta.derivedMetrics).length ? (
-              <p className="muted">
-                Derived metric deltas:{' '}
-                {Object.entries(comparison.delta.derivedMetrics)
-                  .map(([name, d]) => `${name}: ${d.left ?? '—'} → ${d.right ?? '—'} (${d.delta === null ? 'n/a' : (d.delta >= 0 ? '+' : '') + d.delta.toFixed(3)})`)
-                  .join(', ')}
-              </p>
-            ) : null}
-          </>
-        ) : null}
-      </section>
+            <span className="badge">{runs.length} runs</span>
+          </div>
+          <div className="run-filters">
+            <div className="field">
+              <label>Stage</label>
+              <select value={runStageFilter} onChange={(event) => setRunStageFilter(event.target.value)}>
+                <option value="">All stages</option>
+                <option value="eval">Eval</option>
+                <option value="red_team">Red team</option>
+                <option value="model_audit">Model audit</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Status</label>
+              <select value={runStatusFilter} onChange={(event) => setRunStatusFilter(event.target.value)}>
+                <option value="">All statuses</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="running">Running</option>
+                <option value="cancelling">Cancelling</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Outcome</label>
+              <select value={runOutcomeFilter} onChange={(event) => setRunOutcomeFilter(event.target.value)}>
+                <option value="">Any outcome</option>
+                <option value="pass">Has pass</option>
+                <option value="fail">Has fail</option>
+                <option value="error">Has error</option>
+                <option value="not_pass">Needs attention</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Rerun mode</label>
+              <select value={rerunMode} onChange={(event) => setRerunMode(event.target.value as 'failures' | 'errors' | 'all')}>
+                <option value="failures">Failures and errors</option>
+                <option value="errors">Errors only</option>
+                <option value="all">All rows</option>
+              </select>
+            </div>
+          </div>
+          <div className="drilldown-list">
+            {runs.map((run) => {
+              const summary = run.results?.summary;
+              const isOpen = selectedRun?.id === run.id;
+              return (
+                <div className={isOpen ? 'drilldown-item open' : 'drilldown-item'} key={run.id}>
+                  <div className="run-drilldown-row">
+                    <button type="button" className="drilldown-summary run-drilldown-summary" onClick={() => toggleRunTrace(run.id)}>
+                      <span className="drilldown-chevron" aria-hidden="true" />
+                      <span className="badge">{run.status}</span>
+                      <span className="drilldown-title">
+                        {run.stageKey.replace('_', ' ')}
+                        <span className="muted"> · {new Date(run.createdAt).toLocaleString()}</span>
+                      </span>
+                      <span className="muted drilldown-meta">{summary ? `${summary.pass}/${summary.total} pass` : 'No results'}</span>
+                    </button>
+                    <div className="run-drilldown-actions">
+                      <button className="secondary-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleRerun(run.id)}>
+                        Rerun
+                      </button>
+                      {['running', 'queued', 'cancelling'].includes(run.status) ? (
+                        <button className="danger-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleCancelRun(run.id)}>
+                          Cancel
+                        </button>
+                      ) : null}
+                      <button className="ghost-button" type="button" disabled={isViewer || runBusy === run.id} title={viewerTitle} onClick={() => handleDeleteRun(run.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                  {isOpen ? (
+                    <div className="control-breakdown">
+                      <div className="trace-list">
+                        {trace.length ? (
+                          trace.map((row) => (
+                            <div className="trace-row" key={`${row.index}-${row.test}`}>
+                              <div className="trace-head">
+                                <span className={row.pass ? 'result-pass' : 'result-fail'}>{row.pass ? 'PASS' : row.error ? 'ERROR' : 'FAIL'}</span>
+                                <strong>{row.test}</strong>
+                                <span className="muted">
+                                  {row.latencyMs ? `${row.latencyMs} ms` : ''}
+                                  {row.cacheHit ? ' (cached)' : ''}
+                                </span>
+                              </div>
+                              <dl className="definition-list">
+                                <dt>Prompt</dt>
+                                <dd>{row.prompt || 'No prompt captured'}</dd>
+                                <dt>Output</dt>
+                                <dd>{row.output || row.error || 'No output captured'}</dd>
+                                <dt>Assertions</dt>
+                                <dd>{row.assertions.length ? JSON.stringify(row.assertions) : 'No assertions captured'}</dd>
+                                {row.finishReason ? (
+                                  <>
+                                    <dt>Finish reason</dt>
+                                    <dd>{row.finishReason}</dd>
+                                  </>
+                                ) : null}
+                                {row.vars && Object.keys(row.vars).length ? (
+                                  <>
+                                    <dt>Variables</dt>
+                                    <dd>{JSON.stringify(row.vars)}</dd>
+                                  </>
+                                ) : null}
+                              </dl>
+                              {row.rawResponse !== undefined && row.rawResponse !== null ? (
+                                <details>
+                                  <summary>View raw provider response</summary>
+                                  <pre className="config-preview">
+                                    {typeof row.rawResponse === 'string' ? row.rawResponse : JSON.stringify(row.rawResponse, null, 2)}
+                                  </pre>
+                                </details>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <p className="muted">Loading trace...</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+            {runs.length ? null : <p className="muted">No runs match the selected filters.</p>}
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'compare' ? (
+        <section className="subpanel evidence-panel">
+          <h3>Compare runs</h3>
+          <p className="muted">Diff two runs to see what changed between them.</p>
+          <div className="form-grid">
+            <div className="field">
+              <label>Baseline</label>
+              <select value={leftRun} onChange={(event) => setLeftRun(event.target.value)}>
+                <option value="">Select run</option>
+                {runs.map((run) => (
+                  <option value={run.id} key={run.id}>
+                    {run.stageKey} · {new Date(run.createdAt).toLocaleString()}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Candidate</label>
+              <select value={rightRun} onChange={(event) => setRightRun(event.target.value)}>
+                <option value="">Select run</option>
+                {runs.map((run) => (
+                  <option value={run.id} key={run.id}>
+                    {run.stageKey} · {new Date(run.createdAt).toLocaleString()}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="stage-actions">
+            <button className="primary-button" type="button" disabled={!leftRun || !rightRun || leftRun === rightRun} onClick={handleCompare}>
+              Compare
+            </button>
+          </div>
+          {comparison ? (
+            <>
+              <div className="run-summary">
+                <div><span>Pass delta</span><strong>{comparison.delta.pass}</strong></div>
+                <div><span>Fail delta</span><strong>{comparison.delta.fail}</strong></div>
+                <div><span>Error delta</span><strong>{comparison.delta.error}</strong></div>
+                <div><span>Changed</span><strong>{comparison.changed.length}</strong></div>
+              </div>
+              {comparison.delta.namedScores && Object.keys(comparison.delta.namedScores).length ? (
+                <p className="muted">
+                  Named score deltas:{' '}
+                  {Object.entries(comparison.delta.namedScores)
+                    .map(([name, d]) => `${name}: ${d.left ?? '—'} → ${d.right ?? '—'} (${d.delta === null ? 'n/a' : (d.delta >= 0 ? '+' : '') + d.delta.toFixed(3)})`)
+                    .join(', ')}
+                </p>
+              ) : null}
+              {comparison.delta.derivedMetrics && Object.keys(comparison.delta.derivedMetrics).length ? (
+                <p className="muted">
+                  Derived metric deltas:{' '}
+                  {Object.entries(comparison.delta.derivedMetrics)
+                    .map(([name, d]) => `${name}: ${d.left ?? '—'} → ${d.right ?? '—'} (${d.delta === null ? 'n/a' : (d.delta >= 0 ? '+' : '') + d.delta.toFixed(3)})`)
+                    .join(', ')}
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
