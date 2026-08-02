@@ -26,6 +26,7 @@ const {
   AUDIT_SCANNERS,
   AUDIT_BASELINE_CHECKS,
 } = require('./shared/workflow-catalog.cjs');
+const frameworksCatalog = require('./shared/frameworks.cjs');
 
 const app = express();
 const port = Number(process.env.APP_PORT || 18080);
@@ -4728,6 +4729,16 @@ async function buildRedTeamCases(target) {
   // /plan and the actual run route) can read it off the same value instead of a second return
   // channel that would have meant touching both call sites' destructuring.
   rows.realGenerationFallbackReason = redteam.useRealGeneration ? realGenerationFallbackReason : null;
+
+  // Framework/control attribution, applied uniformly regardless of source (local-templated,
+  // real-generated, or custom probe) so every row that has a plugin id carries the same
+  // compliance metadata. A plugin with no framework mapping gets `frameworks: []` — that's
+  // truthful, not a gap: most local probe templates (e.g. custom, cyberseceval) genuinely
+  // aren't part of any of the 9 frameworks promptfoo maps, same as upstream.
+  for (const row of rows) {
+    row.frameworks = frameworksCatalog.getFrameworksForPlugin(row.plugin || '');
+  }
+
   return rows;
 }
 
@@ -5172,6 +5183,7 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
           strategy: caseItem.strategy,
           severity: caseItem.severity,
           source: caseItem.source,
+          frameworks: caseItem.frameworks || [],
           prompt,
           output: result.output,
           pass: assessment.pass,
@@ -5189,6 +5201,7 @@ async function executeRedTeamRun(target, runOptions = {}, execution = {}) {
           strategy: caseItem.strategy,
           severity: caseItem.severity,
           source: caseItem.source,
+          frameworks: caseItem.frameworks || [],
           prompt,
           output: '',
           pass: false,
