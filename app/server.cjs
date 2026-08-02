@@ -4795,6 +4795,33 @@ async function gradeWithRealGrader(target, provider, purpose, caseItem, output) 
 // no eval provider configured, no resolvable key, the call itself erroring, or an empty
 // response — so callers can fall through to the existing honest generic-placeholder behavior
 // rather than fabricate a result.
+// A self-hosted generator model can itself refuse the generation request (its safety training
+// doesn't distinguish "write me a harmful message" from "write me a harmful message to use as a
+// red-team test case") — without this check, that refusal text gets used AS the probe verbatim,
+// producing a garbled non-attack (e.g. "I can't create jailbreak or adversarial prompts
+// designed to bypass" sent to the target as if it were the adversarial input). Caught live
+// during a compliance-verification run against a reasoning model that refused a `religion`
+// probe generation request. Deliberately conservative (checks the FULL text against short
+// canonical refusal openers, not a substring match anywhere) to avoid false-positive rejecting
+// a legitimately-generated probe that happens to quote a refusal as part of its scenario.
+const GENERATOR_REFUSAL_PATTERNS = [
+  /^i can'?t/i,
+  /^i cannot/i,
+  /^i'?m sorry/i,
+  /^i'?m not able to/i,
+  /^i won'?t/i,
+  /^sorry, (i|but)/i,
+  /^as an ai/i,
+  /^i'?m unable to/i,
+];
+function looksLikeGeneratorRefusal(text) {
+  const trimmed = text.trim();
+  // Short AND starts with a canonical refusal opener - a long response that happens to start
+  // this way is far more likely to be a real probe framed as a quoted refusal than an actual
+  // generator refusal, so length is part of the signal, not just the opener.
+  return trimmed.length < 220 && GENERATOR_REFUSAL_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
 async function generateSelfHostedProbe(target, plugin, purpose) {
   const description = REDTEAM_REMOTE_ONLY_PLUGIN_DESCRIPTIONS[plugin];
   if (!description) return null;
@@ -4829,7 +4856,8 @@ async function generateSelfHostedProbe(target, plugin, purpose) {
       'Self-hosted red-team probe generation',
     );
     const text = String(result.output || '').trim();
-    return text || null;
+    if (!text || looksLikeGeneratorRefusal(text)) return null;
+    return text;
   } catch (error) {
     console.error(`Self-hosted probe generation failed for plugin ${plugin}:`, error.message);
     return null;
@@ -4882,7 +4910,8 @@ async function generateSelfHostedStrategyTransform(target, base, strategy, purpo
       'Self-hosted red-team strategy transform',
     );
     const text = String(result.output || '').trim();
-    return text || null;
+    if (!text || looksLikeGeneratorRefusal(text)) return null;
+    return text;
   } catch (error) {
     console.error(`Self-hosted strategy transform failed for strategy ${strategy}:`, error.message);
     return null;
