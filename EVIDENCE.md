@@ -375,6 +375,85 @@ Cohere, Gemini, Azure OpenAI), or CLI/custom-script providers. Those were
 verified in earlier iterations this session (see `HANDOVER.md`) but not
 re-exercised here.
 
+## 13. Framework Compliance (ISO 42001 / EU AI Act / NIST AI RMF / OWASP LLM+API+Agentic / MITRE ATLAS / GDPR / DoD AI Ethics)
+
+**Test**: bring promptfoo's full framework-compliance capability into this
+product as a first-class, self-hosted feature — every framework/control
+mapping in `promptfoo-source/src/redteam/constants/frameworks.ts`, threaded
+through red-team generation → grading → storage → findings → every export
+format → UI, and a self-hosted fork of the ~78 plugins / ~10 strategies
+that require promptfoo's own hosted generation service upstream.
+
+**Data layer**: `app/shared/frameworks.cjs` — extracted the real
+`FRAMEWORK_NAMES`, all 9 `*_MAPPING` constants, `riskCategorySeverityMap`,
+and `categoryAliases` from `promptfoo-source` via `esbuild --bundle` +
+`require()` + JSON dump (not hand-transcribed), giving 9 frameworks and
+100 control-level mappings exactly matching upstream. Verified:
+`getFrameworksForPlugin('harmful:hate')` returns 8 real framework/control
+attributions across 6 different frameworks, including via the `harmful`
+collection-expansion quirk upstream's own algorithm has.
+
+**Generation → storage → report**: `buildRedTeamCases()` tags every row
+with its `frameworks` array; `buildTargetReportPayload()` aggregates
+`categoryStats` from the target's *full* red-team run history (a dedicated
+query, not the shared 100-row cross-stage cap) and computes per-framework
+compliance via `computeFrameworkCompliance()` (ports
+`categorizePlugins`/`expandPluginCollections`/severity-ranking from
+promptfoo's own `FrameworkCompliance.tsx`/`FrameworkCard.tsx`, including
+"untested" as a state distinct from "compliant"/"non-compliant" — a
+framework with zero evidence reports `isCompliant: null`, not `true`).
+
+**Live verification** against the `deepseek-ai/deepseek-v4-pro` NVIDIA
+registry target (`845c4906-8adf-447c-aa36-5074969773de`):
+
+| Surface | Result |
+|---|---|
+| `GET /report` (JSON) | `frameworkCompliance.frameworksEvaluated: 9/9`, `frameworksCompliant: 9`, matching 2 real red-team runs (8 rows: harmful:hate/pii:direct/excessive-agency/hijacking × jailbreak/prompt-injection) |
+| `GET /export/markdown` | Real "## Framework Compliance" table, all 9 frameworks, correct ASR/status columns |
+| `GET /export/html` | Same table rendered with pass/fail/unevaluated CSS classes |
+| `GET /export/compliance-csv` | 414 real rows, exact promptfoo `FrameworkCsvExporter.tsx` column shape (Framework, Category, Plugin, Severity, Tests Run, Attacks Successful, ASR%, Status) |
+| Evidence workspace UI | Badge shows "9/9 compliant" (DOM-verified — screenshot tool had an unrelated rendering glitch this session, confirmed instead via `javascript_tool` DOM inspection); expanding "OWASP LLM Top 10" renders 10 real controls and 49 plugin pills, correctly color-coded pass/untested against the live run data |
+
+**Self-hosted generation fork**: of promptfoo's 78 remote-only plugins, 72
+have no hand-written local template and previously fell to a generic
+"Attempt X against this application" placeholder; of its 10 remote-only
+strategies, none matched any case in the existing static transform switch
+and were previously applied as a silent no-op. Both now call whatever
+provider is already configured as the target's own eval provider (no
+external hosted service) to generate real, plugin-grounded content.
+
+Live test: selected 3 remote-only plugins (`ferpa`, `competitors`
+[has a local template], `coppa`) × 2 remote-only strategies
+(`jailbreak:composite`, `citation`) against the same NVIDIA target.
+`competitors` correctly stayed on the existing local-template path
+(`source: "generated"`); `ferpa` and `coppa` received real self-hosted-
+generated content (`source: "self-hosted-generated"`) — e.g. `ferpa` ×
+`jailbreak:composite` produced a realistic pretext email exploiting a
+fabricated "compliance override" around parent-portal access. All 6 rows
+correctly carried `strategyApproximated: true`. Full run: 6/6 pass
+(the target resisted every probe), 0 errors. Re-verified via
+`GET /export/csv`: real rows with `source="self-hosted-generated"` and
+`strategy_approximated="true"` present in the exported file — provenance
+survives to the raw CSV, not just the API response, and the same labels
+were added to Findings (UI), the Markdown report, and the HTML report so
+a self-hosted-generated or strategy-approximated finding is never silently
+indistinguishable from an upstream-fidelity one.
+
+**What this pass did not cover**: exhaustive per-plugin/per-strategy
+testing of all 72 self-hosted-generated plugins and 9 approximated
+strategies individually (the mechanism is generic — grounded by each
+plugin/strategy's real description, not per-id special-cased code — so 3
+plugins + 2 strategies was treated as a representative sample of a uniform
+mechanism, not a claim that every one of the 82 was individually
+exercised). `audio` strategy was verified only at the code level (static
+disclaimer-wrapped fallback, no LLM call) — not run live, since there is
+no meaningful "pass/fail" for a strategy this product openly labels as
+unavailable-in-spirit rather than approximated.
+
+Result: **Pass.**
+
+---
+
 ## Cleanup note
 
 Two targets created purely for this test pass remain in the registry as

@@ -4087,3 +4087,132 @@ this loop, not an unlimited test double.
       original single-Groq-provider eval config and cleared the
       red-team plugins/strategies back to empty afterward; baseline
       eval still passes.
+
+## Change log — iteration 81 (framework-compliance capability: full promptfoo parity, self-hosted end to end)
+
+99. User-requested feature, not a self-directed gap sweep: bring the
+    complete promptfoo framework-compliance capability into this
+    product as first-class, self-hosted — every framework/control
+    mapping in `frameworks.ts`, threaded through generation → grading
+    → storage → findings → every export format → UI, with a
+    self-hosted fork of the plugins/strategies that require
+    promptfoo's own hosted generation service upstream. Explicit
+    architecture constraint from the user: wire into the *existing*
+    red-team/report/export flow, no new stage, no
+    `/api/targets/:id/stages/compliance/...`, no new stage runner, no
+    `compliance_runs` table, no standalone workspace — this is a lens
+    over existing red-team results, threaded through
+    `target_stage_runs.metadata`/results the same way findings already
+    are.
+    - Added `app/shared/frameworks.cjs`: `FRAMEWORK_NAMES` (9
+      frameworks — OWASP LLM/API/Agentic Top 10, NIST AI RMF, MITRE
+      ATLAS, EU AI Act, ISO 42001, GDPR, DoD AI Ethics), `FRAMEWORK_MAPPINGS`
+      (100 control-level plugin/strategy mappings),
+      `riskCategorySeverityMap`, `categoryAliases`,
+      `getFrameworksForPlugin()` (reverse lookup including the real
+      `harmful` collection-expansion quirk from upstream's own
+      algorithm), and `computeFrameworkCompliance()` (ports
+      `categorizePlugins`/`expandPluginCollections`/severity-ranking
+      from promptfoo's `FrameworkCompliance.tsx`/`FrameworkCard.tsx` —
+      a framework with zero test evidence reports `isCompliant: null`,
+      distinct from `true`/`false`, so "not evaluated" is never
+      conflated with "evaluated and passing"). All of this was
+      extracted from the real `promptfoo-source/src/redteam/constants/
+      {frameworks,metadata}.ts` via `esbuild --bundle` +
+      `require()` + JSON dump, not hand-transcribed — verified the
+      counts (9 frameworks, 100 controls, 171 severity/alias entries)
+      against the live extracted data before writing the CJS module.
+    - `buildRedTeamCases()` now tags every row (local-templated,
+      real-generated, or custom probe) with a `frameworks` array via
+      `getFrameworksForPlugin()`.
+    - `buildTargetReportPayload()` gained a `frameworkCompliance`
+      section: aggregates `categoryStats` (per-plugin pass/total/
+      failCount) from the target's *full* red-team run history via a
+      dedicated query (not the shared 100-row cross-stage cap other
+      report fields use, which would silently starve compliance
+      coverage on a target with heavy eval/model-audit activity), then
+      computes per-framework state. Reports `frameworksEvaluated` vs
+      `frameworksCompliant` as distinct counts.
+    - Every existing export format now carries it automatically:
+      `buildMarkdownReport`/`buildHtmlReport` gained a "Framework
+      Compliance" section/table; a new `compliance-csv` format at
+      `GET /api/targets/:id/export/compliance-csv` ports promptfoo's
+      own `FrameworkCsvExporter.tsx` row shape exactly (Framework,
+      Category, Plugin, Severity, Tests Run, Attacks Successful,
+      ASR%, Status) so it opens the same way in whatever tooling an
+      auditor already uses for promptfoo's own exports.
+    - Added a Framework Compliance section to the existing Evidence
+      workspace UI (`app/frontend/src/main.tsx`) — not a new stage tab
+      — between Scorecard and Findings: a summary badge, one
+      expandable row per framework, expanding to a per-control
+      breakdown with color-coded plugin pills (pass/fail/untested).
+      Reimplemented in this product's own stack rather than importing
+      promptfoo's React app, per the task's explicit instruction.
+    - **Self-hosted generation fork** (the one new subsystem the task
+      explicitly called out as justified): promptfoo requires its own
+      hosted generation service for 78 plugins
+      (`REMOTE_ONLY_PLUGIN_IDS`, excluding the 16 coding-agent-only
+      ones this product's plugin catalog doesn't expose) and 10
+      strategies (`STRATEGIES_REQUIRING_REMOTE`) — without it,
+      generation silently produces zero test cases for anything in
+      those sets. Exported the exact sets plus their real descriptions
+      (same bundle-and-extract method) into
+      `app/shared/workflow-catalog.cjs`. Added
+      `generateSelfHostedProbe()`/`generateSelfHostedStrategyTransform()`
+      to `app/server.cjs`, calling whatever provider is already
+      configured as the target's own eval provider — the identical
+      in-boundary bridge `generateRealRedTeamCases`/the red-team
+      grading provider already use — to generate plugin-appropriate
+      content grounded in each plugin/strategy's real description. No
+      external hosted service is ever contacted; the backend is
+      whatever self-hosted/in-infra model the deployment already
+      configured as its eval provider.
+      `buildRedTeamCasesLocal` (now async) wires this in: of the 72
+      remote-only plugins with no hand-written local template
+      (previously a generic "Attempt X against this application"
+      placeholder), the self-hosted call is cached once per plugin per
+      run (not once per plugin × strategy) and tagged
+      `source: "self-hosted-generated"`. Of the 10 remote-only
+      strategies (previously a silent no-op — none matched any case in
+      the static `applyStrategyTransform` switch, so selecting one
+      left the base prompt completely unmodified with no indication
+      anything was wrong), 9 now get a genuine single-shot self-hosted
+      approximation tagged `strategyApproximated: true`; `audio` is
+      deliberately excluded from LLM approximation (no self-hosted
+      audio-synthesis pipeline exists in this product) and instead
+      gets a static, honestly-labeled text disclaimer rather than a
+      silent pass-through or a faked audio-strategy claim.
+    - Threaded `source`/`strategyApproximated` through every consumer
+      that reads red-team rows — `buildRunFindings`, `runsToCsv`,
+      `buildMarkdownReport`, `buildHtmlReport`, and the Evidence
+      workspace Findings UI — so a finding produced via the
+      self-hosted fork or an approximated strategy is never silently
+      indistinguishable from one produced with upstream fidelity, on
+      any evidence surface, matching the model-audit stage's existing
+      "not evaluated, never faked" convention.
+    - Verified live end to end against the real
+      `deepseek-ai/deepseek-v4-pro` NVIDIA-backed registry target
+      (`845c4906-8adf-447c-aa36-5074969773de`): `GET /report` returned
+      `frameworksEvaluated: 9/9`, `frameworksCompliant: 9` from 2 real
+      red-team runs; Markdown/HTML/compliance-csv (414 rows) exports
+      all carried the same data; the Evidence UI badge and expandable
+      per-control breakdown were confirmed via DOM inspection (the
+      Browser pane's screenshot tool hit an unrelated rendering glitch
+      this session — confirmed instead via `javascript_tool`, which is
+      an equally valid live-DOM check). Selected 3 remote-only plugins
+      (`ferpa`, `competitors` [has a local template, as a control],
+      `coppa`) × 2 remote-only strategies (`jailbreak:composite`,
+      `citation`): `competitors` correctly used the existing template
+      path; `ferpa`/`coppa` received real self-hosted-generated
+      content (e.g. a realistic phishing-pretext email for `ferpa` ×
+      `jailbreak:composite`); all 6 rows carried
+      `strategyApproximated: true`; re-verified via `GET /export/csv`
+      that `source`/`strategy_approximated` survive to the raw
+      exported file, not just the API response. Full run: 6/6 pass, 0
+      errors. Full detail in `EVIDENCE.md` § 13.
+    - Scope note: the self-hosted mechanism is generic (grounded by
+      each plugin/strategy's real description, not per-id
+      special-cased code), so 3 plugins + 2 strategies was exercised
+      as a representative sample of one uniform code path, not a claim
+      that all 72 self-hosted-generated plugins and 9 approximated
+      strategies were each individually run live.
