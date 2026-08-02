@@ -157,6 +157,9 @@ export interface EvalStageConfigPayload {
     transform?: string;
     threshold?: number;
     rubricPrompt?: string;
+    // Real promptfoo's test.options.storeOutputAs — stores this case's real output into a named
+    // register, available as a template var in every LATER test case in the same run.
+    storeOutputAs?: string;
   }>;
   promptTemplate: string;
   injectVar: string;

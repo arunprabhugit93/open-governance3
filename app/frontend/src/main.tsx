@@ -1978,6 +1978,19 @@ function EvalWorkspace({
                   instructed to return JSON with <code>pass</code>/<code>score</code>/<code>reason</code>.
                 </p>
               </div>
+              <div className="field">
+                <label>Store output as (optional)</label>
+                <input
+                  value={testCase.storeOutputAs || ''}
+                  onChange={(event) => updateTestCase(index, { storeOutputAs: event.target.value || undefined })}
+                  placeholder="e.g. firstReply"
+                />
+                <p className="field-help">
+                  Saves this case's real output as <code>{'{{'}</code><code>name</code><code>{'}}'}</code>, usable in
+                  every LATER test case's input/vars/assertions — e.g. to check the target stays consistent about
+                  something it said earlier. Forces sequential (non-concurrent) execution for the whole run when used.
+                </p>
+              </div>
               <div className="assertion-editor span-3">
                 <div className="row-toolbar">
                   <strong>Assertions</strong>

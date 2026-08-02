@@ -591,6 +591,7 @@ function normalizeDatasetRows(rows) {
     metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
     transform: row.transform || row.options?.transform || undefined,
     rubricPrompt: row.rubricPrompt || row.options?.rubricPrompt || undefined,
+    storeOutputAs: row.storeOutputAs || row.options?.storeOutputAs || undefined,
     // Real promptfoo's test-level `threshold` — overrides the default all-assertions-must-pass
     // logic with "pass iff weighted-average assertion score >= threshold" (see executeEvalRun).
     // Was previously dropped here entirely, silently losing it on import from a real config.
@@ -1128,12 +1129,16 @@ function buildEvalTests(target) {
       },
       assert: [...baseAssertions, ...normalizeAssertions(testCase.assertions, testCase.assertion, testCase.expected)],
       metadata: testCase.metadata || undefined,
-      options: (testCase.transform || testCase.rubricPrompt)
+      options: (testCase.transform || testCase.rubricPrompt || testCase.storeOutputAs)
         ? {
             ...(testCase.transform ? { transform: testCase.transform } : {}),
             // Real promptfoo's test.options.rubricPrompt — fully replaces the default judge
             // grading prompt for llm-rubric/model-graded-* assertions on this test.
             ...(testCase.rubricPrompt ? { rubricPrompt: testCase.rubricPrompt } : {}),
+            // Real promptfoo's test.options.storeOutputAs — stores this test's real output into
+            // a named register, available as a template var in every LATER test case in the same
+            // run (see executeEvalRun's registers handling).
+            ...(testCase.storeOutputAs ? { storeOutputAs: testCase.storeOutputAs } : {}),
           }
         : undefined,
       threshold: Number.isFinite(Number(testCase.threshold)) ? Number(testCase.threshold) : undefined,
@@ -4071,8 +4076,16 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
   const extensions = asArray(target.metadata?.eval?.extensions);
   const repeat = Math.max(1, Number(runOptions.repeat || 1));
   const delayMs = Math.max(0, Number(runOptions.delayMs || 0));
-  const maxConcurrency = Math.max(1, Number(runOptions.maxConcurrency || 1));
+  // Real promptfoo's own storeOutputAs handling forces concurrency to 1 whenever any test uses
+  // it, since a later test's rendered prompt may depend on an earlier test's real output —
+  // running out of order or concurrently would make that dependency non-deterministic.
+  const usesStoreOutputAs = tests.some((test) => test.options?.storeOutputAs);
+  const maxConcurrency = usesStoreOutputAs ? 1 : Math.max(1, Number(runOptions.maxConcurrency || 1));
   const cacheEnabled = Boolean(runOptions.cache);
+  // Real promptfoo's `registers` — persists for the whole run (not per-task), merged into every
+  // subsequent task's vars before that task's prompt is (re-)rendered, so storeOutputAs on one
+  // test case makes its real output available as a template var in every LATER test case.
+  const registers = {};
   const tasks = [];
 
   for (const [providerIndex, provider] of providers.entries()) {
@@ -4113,6 +4126,13 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
       return null;
     }
     const started = Date.now();
+    // Merge in any registers stored by earlier test cases (storeOutputAs) before this task's
+    // prompt is used at all — real promptfoo does this as a base vars-resolution step, so
+    // extension hooks below still run and can override on top of it, same relative ordering.
+    if (Object.keys(registers).length) {
+      task.vars = { ...registers, ...task.vars };
+      task.prompt = applyTemplate(task.promptTemplate, task.vars);
+    }
     if (extensions.length) {
       try {
         const mutatedTest = await runBeforeEachExtensionHooks(extensions, {
@@ -4203,6 +4223,9 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         } catch (error) {
           throw new Error(`Output transform failed: ${error.message}`);
         }
+      }
+      if (task.test?.options?.storeOutputAs) {
+        registers[task.test.options.storeOutputAs] = result.output;
       }
       const assertionResults = [];
       for (const assertion of task.assertions) {

@@ -3894,3 +3894,61 @@ this loop, not an unlimited test double.
       caught and corrected before finalizing) and confirmed the
       baseline passes as before. `tsc --noEmit` and the production
       `vite build` both passed clean.
+
+## Change log — iteration 77 (eval: storeOutputAs sequential cross-test-case variable chaining)
+
+95. A structurally different feature than the last several iterations
+    (a run-level execution-order mechanism, not a single-assertion or
+    single-plugin field). Real promptfoo's `test.options.storeOutputAs`
+    stores one test case's real output into a named "register" that
+    persists for the rest of the eval run and gets merged into every
+    LATER test case's vars before that test's prompt is rendered
+    (`evaluator.ts`) — used to build sequential test chains (e.g.
+    testing whether a target stays consistent about something it said
+    two steps earlier). Real promptfoo also automatically forces
+    `maxConcurrency` to 1 for the whole run whenever any test uses it,
+    since later tests genuinely depend on earlier ones finishing
+    first. This product built every task's prompt once, upfront, in a
+    single batch before any provider calls happened, with no
+    mechanism at all for a later task to see an earlier task's actual
+    response.
+    - Added `testCase.storeOutputAs` (test-level, same
+      `buildEvalTests`/`normalizeDatasetRows` threading pattern as
+      `transform`/`rubricPrompt` before it).
+    - `executeEvalRun` now detects `usesStoreOutputAs` across all
+      tests and forces `maxConcurrency = 1` when true (matching real
+      promptfoo's own safety behavior — the pre-existing
+      user-configured concurrency setting is intentionally overridden,
+      not merely defaulted, since concurrent execution would make the
+      dependency non-deterministic).
+    - Added a `registers` object shared across the whole run (not
+      per-task). At the start of each task, if any registers exist yet,
+      they're merged into that task's vars and its prompt is
+      re-rendered from the already-stored `promptTemplate` — the same
+      re-render mechanism already used for `beforeEach`-hook-mutated
+      vars, reused rather than duplicated. After a task's real result
+      is obtained (post output-transform, matching real promptfoo's
+      own timing — `ret.response.output`), if that task's test has
+      `storeOutputAs` set, the result is written into `registers`.
+    - Added a "Store output as (optional)" field to the eval test-case
+      editor. Extended `EvalStageConfigPayload.testCases[]` in
+      `api.ts`.
+    - Verified live against the real Groq-backed E2E reference target,
+      and caught a real modeling mistake in the FIRST verification
+      attempt before it could be mistaken for a bug: initially put the
+      `{{firstReply}}` reference inside a test case's raw *input*
+      text, which this product's architecture treats as a literal var
+      *value* (the injectVar), not template source — Nunjucks
+      correctly does not recursively re-render an already-substituted
+      string, so the placeholder stayed literal in the row's recorded
+      prompt. Corrected the test to put `{{firstReply}}` in the
+      *prompt template* itself instead (where template evaluation
+      actually happens) and re-ran: step 1's real output
+      (`"PING-42"`) correctly appeared verbatim in step 2's actual
+      rendered prompt (`"...(Previous reply: PING-42)"`), and step 1's
+      own prompt correctly rendered the not-yet-set register as empty
+      rather than erroring — confirming both the sequential
+      execution/write-then-read ordering and the safe-undefined
+      behavior work correctly together. Restored the target's original
+      single prompt template and single test case afterward. `tsc
+      --noEmit` and the production `vite build` both passed clean.
