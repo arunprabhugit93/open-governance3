@@ -698,6 +698,33 @@ function markdownEscape(value) {
   return String(value ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
+// Aggregates every red_team run in a target's run history into per-plugin {pass, total,
+// failCount} - the categoryStats shape computeFrameworkCompliance expects. Spans the FULL
+// history (not just the latest run) so framework coverage accumulates across runs the same way
+// promptfoo's own eval-level report does, rather than resetting every time someone reruns a
+// red-team with a different, smaller plugin selection.
+// Rows whose provider call itself errored (no real pass/fail verdict - e.g. a rate-limited key)
+// are excluded from pass/total/failCount entirely rather than counted as either a pass or a
+// failed attack, so a plugin with only errored attempts correctly reports as "untested", not
+// falsely compliant or falsely non-compliant.
+function categoryStatsFromRedTeamRuns(runs) {
+  const stats = {};
+  for (const run of runs) {
+    if (run.stageKey !== 'red_team') continue;
+    const rows = run.results?.rows || [];
+    for (const row of rows) {
+      if (!row.plugin) continue;
+      if (row.error) continue;
+      if (!stats[row.plugin]) stats[row.plugin] = { pass: 0, total: 0, failCount: 0 };
+      const bucket = stats[row.plugin];
+      bucket.total += 1;
+      if (row.pass) bucket.pass += 1;
+      else bucket.failCount += 1;
+    }
+  }
+  return stats;
+}
+
 async function buildTargetReportPayload(targetId) {
   const payload = await fetchTarget(targetId);
   if (!payload) return null;
@@ -715,6 +742,20 @@ async function buildTargetReportPayload(targetId) {
      limit 100`,
     [targetId],
   );
+  // A dedicated, uncapped-relative-to-other-stages query: historyRows above is shared across
+  // eval/red_team/model_audit and capped at 100 total, so a target with a lot of eval activity
+  // could starve red_team rows out of that window and silently under-report framework coverage.
+  // Compliance evidence needs every red-team run that ever happened, not just whichever ones
+  // survived a cross-stage cap.
+  const redTeamHistoryRows = await pool.query(
+    `select * from target_stage_runs
+     where target_id = $1 and stage_key = 'red_team'
+     order by created_at desc
+     limit 500`,
+    [targetId],
+  );
+  const categoryStats = categoryStatsFromRedTeamRuns(redTeamHistoryRows.rows.map(rowToRun));
+  const frameworkCompliance = frameworksCatalog.computeFrameworkCompliance(categoryStats);
   const latestRuns = latestRows.rows.map(rowToRun);
   const latestByStage = Object.fromEntries(latestRuns.map((run) => [run.stageKey, run]));
   const summaries = Object.fromEntries(
@@ -747,6 +788,18 @@ async function buildTargetReportPayload(targetId) {
     latestRuns: latestByStage,
     runHistory: historyRows.rows.map(rowToRun),
     findings,
+    // frameworksEvaluated: how many of the 9 have ANY test evidence at all (isCompliant !==
+    // null) vs frameworksCompliant: how many of those are fully passing - kept distinct so a
+    // report never conflates "we haven't tested this yet" with "we tested it and it passed".
+    frameworkCompliance: {
+      pluginPassRateThreshold: frameworksCatalog.DEFAULT_PLUGIN_PASS_RATE_THRESHOLD,
+      redTeamRunsConsidered: redTeamHistoryRows.rows.length,
+      frameworksEvaluated: Object.values(frameworkCompliance).filter((fw) => fw.isCompliant !== null).length,
+      frameworksCompliant: Object.values(frameworkCompliance).filter((fw) => fw.isCompliant === true).length,
+      totalFrameworks: Object.keys(frameworkCompliance).length,
+      frameworks: frameworkCompliance,
+      categoryStats,
+    },
     engineConfigYaml: payload.promptfooConfigYaml,
   };
 }
@@ -769,6 +822,18 @@ function buildMarkdownReport(report) {
     ...Object.entries(report.scorecard.stages).map(([stage, summary]) =>
       `| ${markdownEscape(stage.replace('_', ' '))} | ${summary.total} | ${summary.pass} | ${summary.fail} | ${summary.error} | ${Math.round(summary.passRate * 100)}% |`,
     ),
+    '',
+    '## Framework Compliance',
+    '',
+    `Evaluated ${report.frameworkCompliance.frameworksEvaluated} of ${report.frameworkCompliance.totalFrameworks} frameworks (${report.frameworkCompliance.frameworksCompliant} fully compliant), from ${report.frameworkCompliance.redTeamRunsConsidered} red-team run(s). Pass-rate threshold: ${Math.round(report.frameworkCompliance.pluginPassRateThreshold * 100)}%.`,
+    '',
+    '| Framework | Status | Severity | Tested plugins | Non-compliant | Untested | Attack success rate |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: |',
+    ...Object.values(report.frameworkCompliance.frameworks).map((fw) => {
+      const status = fw.isCompliant === null ? 'Not evaluated' : fw.isCompliant ? 'Compliant' : 'Non-compliant';
+      const asr = fw.attackSuccessRate === null ? 'N/A' : `${Math.round(fw.attackSuccessRate * 10) / 10}%`;
+      return `| ${markdownEscape(fw.name)} | ${status} | ${fw.severity || '—'} | ${fw.pluginsWithData}/${fw.totalPlugins} | ${fw.nonCompliantPlugins.length} | ${fw.untestedPluginCount} | ${asr} |`;
+    }),
     '',
     '## Findings',
     '',
@@ -807,6 +872,23 @@ function buildHtmlReport(report) {
         <td>${summary.error}</td>
         <td>${Math.round(summary.passRate * 100)}%</td>
       </tr>`)
+    .join('');
+  const complianceRows = Object.values(report.frameworkCompliance.frameworks)
+    .map((fw) => {
+      const status = fw.isCompliant === null ? 'Not evaluated' : fw.isCompliant ? 'Compliant' : 'Non-compliant';
+      const statusClass = fw.isCompliant === null ? 'status-unevaluated' : fw.isCompliant ? 'status-pass' : 'status-fail';
+      const asr = fw.attackSuccessRate === null ? 'N/A' : `${Math.round(fw.attackSuccessRate * 10) / 10}%`;
+      return `
+      <tr>
+        <td>${escapeHtml(fw.name)}</td>
+        <td><span class="${statusClass}">${status}</span></td>
+        <td>${escapeHtml(fw.severity || '—')}</td>
+        <td>${fw.pluginsWithData}/${fw.totalPlugins}</td>
+        <td>${fw.nonCompliantPlugins.length}</td>
+        <td>${fw.untestedPluginCount}</td>
+        <td>${asr}</td>
+      </tr>`;
+    })
     .join('');
   const findingItems = report.findings.length
     ? report.findings.map((finding) => `
@@ -847,6 +929,9 @@ function buildHtmlReport(report) {
     th, td { border-bottom: 1px solid #dde3ee; padding: 10px; text-align: left; }
     th { font-size: 12px; color: #667085; text-transform: uppercase; }
     .finding { border: 1px solid #dde3ee; border-radius: 8px; padding: 12px; margin: 10px 0; background: #fff8f8; }
+    .status-pass { color: #067647; font-weight: 700; }
+    .status-fail { color: #b42318; font-weight: 700; }
+    .status-unevaluated { color: #667085; font-weight: 700; }
     .finding-attack { margin: 4px 0; font-size: 12px; color: #667085; text-transform: uppercase; letter-spacing: 0.02em; }
     pre { white-space: pre-wrap; background: #101827; color: #e8edfb; padding: 14px; border-radius: 8px; overflow: auto; }
     @media (max-width: 760px) { .score { grid-template-columns: 1fr; } main { width: calc(100% - 24px); } }
@@ -868,6 +953,11 @@ function buildHtmlReport(report) {
     <section>
       <h2>Scorecard</h2>
       <table><thead><tr><th>Stage</th><th>Total</th><th>Pass</th><th>Fail</th><th>Error</th><th>Pass rate</th></tr></thead><tbody>${stageRows}</tbody></table>
+    </section>
+    <section>
+      <h2>Framework Compliance</h2>
+      <p class="muted">Evaluated ${report.frameworkCompliance.frameworksEvaluated} of ${report.frameworkCompliance.totalFrameworks} frameworks (${report.frameworkCompliance.frameworksCompliant} fully compliant), from ${report.frameworkCompliance.redTeamRunsConsidered} red-team run(s). Pass-rate threshold: ${Math.round(report.frameworkCompliance.pluginPassRateThreshold * 100)}%.</p>
+      <table><thead><tr><th>Framework</th><th>Status</th><th>Severity</th><th>Tested plugins</th><th>Non-compliant</th><th>Untested</th><th>Attack success rate</th></tr></thead><tbody>${complianceRows}</tbody></table>
     </section>
     <section>
       <h2>Findings</h2>
@@ -5816,6 +5906,51 @@ function runsToCsv(runs) {
   return rows.map((row) => row.map(csvCell).join(',')).join('\n');
 }
 
+// Row shape ports promptfoo's own FrameworkCsvExporter.tsx exactly: Framework, Category,
+// Plugin, Severity, Tests Run, Attacks Successful, Attack Success Rate (%), Status - so this
+// file opens the same way in whatever spreadsheet/GRC tooling an auditor already has for
+// promptfoo's own exports. "Category" uses this product's real control id (e.g. "iso:42001:
+// privacy") rather than upstream's "N/A" placeholder for frameworks without named categories -
+// a strict improvement in traceability, not a fidelity break, since every framework here has a
+// real control identifier behind it.
+function frameworkComplianceToCsv(report) {
+  const categoryStats = report.frameworkCompliance.categoryStats;
+  const header = ['Framework', 'Category', 'Plugin', 'Severity', 'Tests Run', 'Attacks Successful', 'Attack Success Rate (%)', 'Status'];
+  const rows = [header];
+  for (const framework of Object.values(report.frameworkCompliance.frameworks)) {
+    for (const [controlId, control] of Object.entries(framework.controls)) {
+      const category = control.controlName ? `${controlId} — ${control.controlName}` : controlId;
+      for (const plugin of [...control.compliant, ...control.nonCompliant]) {
+        const stats = categoryStats[plugin];
+        const asr = stats.total > 0 ? Math.round((stats.failCount / stats.total) * 1000) / 10 : 0;
+        rows.push([
+          framework.name,
+          category,
+          frameworksCatalog.getPluginDisplayName(plugin),
+          frameworksCatalog.getPluginSeverity(plugin),
+          stats.total,
+          stats.failCount,
+          asr,
+          stats.pass / stats.total >= report.frameworkCompliance.pluginPassRateThreshold ? 'Pass' : 'Fail',
+        ]);
+      }
+      for (const plugin of control.untested) {
+        rows.push([
+          framework.name,
+          category,
+          frameworksCatalog.getPluginDisplayName(plugin),
+          frameworksCatalog.getPluginSeverity(plugin),
+          0,
+          0,
+          0,
+          'Not Tested',
+        ]);
+      }
+    }
+  }
+  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+}
+
 function getReadiness(target) {
   const metadata = target.metadata || {};
   const provider = metadata.provider || {};
@@ -7031,6 +7166,12 @@ app.get('/api/targets/:id/export/:format', requireAuth, async (req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}-assurance-report.html"`);
     return res.send(buildHtmlReport(report));
+  }
+  if (format === 'compliance-csv') {
+    const report = await buildTargetReportPayload(req.params.id);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}-framework-compliance.csv"`);
+    return res.send(frameworkComplianceToCsv(report));
   }
   return res.status(400).json({ error: 'Unsupported export format' });
 });
