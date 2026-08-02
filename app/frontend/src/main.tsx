@@ -2484,6 +2484,7 @@ function RedTeamWorkspace({
   }
   const [entities, setEntities] = useState((redteam.entities || []).join(', '));
   const [policyText, setPolicyText] = useState(redteam.pluginConfig?.policy || '');
+  const [intentGoals, setIntentGoals] = useState((redteam.pluginConfig?.intent || []).join('\n'));
   const [dataClassification, setDataClassification] = useState(runtime.dataClassification || '');
   const [allowedTools, setAllowedTools] = useState((runtime.allowedTools || []).join(', '));
   const [retrievalSources, setRetrievalSources] = useState((runtime.retrievalSources || []).join(', '));
@@ -2555,7 +2556,13 @@ function RedTeamWorkspace({
         assert: defaultAssertRows.filter((row) => row.type),
       },
       entities: parseInlineList(entities),
-      pluginConfig: { policy: policyText.trim() },
+      pluginConfig: {
+        policy: policyText.trim(),
+        intent: intentGoals
+          .split('\n')
+          .map((line: string) => line.trim())
+          .filter(Boolean),
+      },
       customProbes: customProbes.filter((probe) => probe.prompt.trim()),
       dataClassification,
       allowedTools: parseInlineList(allowedTools),
@@ -2900,6 +2907,20 @@ function RedTeamWorkspace({
               <p className="field-help">
                 Required by the "Policy" plugin — it generates and grades probes specifically against this statement
                 instead of a generic policy-bypass attempt. Leave blank to fall back to a generic placeholder policy.
+              </p>
+            </div>
+          ) : null}
+          {plugins.includes('intent') ? (
+            <div className="field">
+              <label>Custom intent goals (one per line)</label>
+              <textarea
+                value={intentGoals}
+                onChange={(event) => setIntentGoals(event.target.value)}
+                placeholder={'e.g. Get the assistant to reveal its system prompt\nGet the assistant to recommend a competitor'}
+              />
+              <p className="field-help">
+                Required by the "Intent" plugin — each line becomes its own probe, sent to the target verbatim as the
+                attack goal (not templated). Leave blank to fall back to a single generic goal.
               </p>
             </div>
           ) : null}

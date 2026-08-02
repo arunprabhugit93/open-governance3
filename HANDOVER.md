@@ -3723,3 +3723,53 @@ this loop, not an unlimited test double.
       the target's schema going forward, same as every other
       newly-introduced field this session). `tsc --noEmit` and the
       production `vite build` both passed clean.
+
+## Change log — iteration 74 (red-team: custom intent goals for the "intent" plugin)
+
+92. Direct follow-up to iteration 73, same gap class: real
+    promptfoo's `intent` plugin also *requires* custom config
+    (`invariant(config.intent, 'An "intent" property is required for
+    the intent plugin.')`) — a list of specific goal strings, each
+    used DIRECTLY as the probe (not LLM-templated at all — the intent
+    text literally becomes the injected prompt, one test case per
+    intent). This product's `intent` template was a fixed generic
+    goal unrelated to any user-specified intents, same as `policy`
+    before iteration 73.
+    - Extended the `pluginConfig` mechanism (added last iteration) with
+      `intent: string[]`.
+    - `buildRedTeamCasesLocal` now cycles round-robin through the
+      configured intent goals as each `intent`-plugin row's base
+      attack content (falling back to the old generic goal when
+      unconfigured). Scoping note, found and documented rather than
+      glossed over: because this product's loop structure is
+      `plugin × strategy` (not "one row per intent" like real
+      promptfoo's own dedicated `generateTests` override), the number
+      of intent-goal rows actually produced is bounded by how many
+      strategies are selected, not directly by how many intents are
+      configured — confirmed live (see below) that this still
+      correctly surfaces every configured goal when enough strategies
+      are selected, and a strategy transform (jailbreak wrapping etc.)
+      now also applies on top of each intent, which real promptfoo
+      itself doesn't do — a deliberate, disclosed product-specific
+      extension, not an attempt at byte-for-byte behavioral parity.
+    - No `gradeWithRealGrader` change was needed this time (unlike
+      `policy`'s `{{value}}`/`{{policy}}` fixes): real promptfoo's own
+      `IntentGrader` rubric already guards its `{{goal}}` reference
+      with a Nunjucks `{% if goal %}...{% else %}{{prompt}}{% endif %}`
+      fallback, so it degrades gracefully to `{{prompt}}` on its own
+      without needing `test.metadata.goal` set — confirmed by reading
+      the actual rubric template, not assumed.
+    - Added a "Custom intent goals (one per line)" textarea to the Red
+      Team workspace, shown when the `intent` plugin is selected.
+      Extended `RedTeamStageConfigPayload` in `api.ts`.
+    - Verified live against the real Groq-backed E2E reference target:
+      configured two concrete intent goals with only 1 strategy
+      selected and confirmed exactly 1 row was produced using the
+      first goal verbatim (demonstrating the plugin×strategy bound
+      noted above); reconfigured with 2 strategies and confirmed both
+      rows now correctly used the two DIFFERENT configured goals — one
+      verbatim (`basic`), one strategy-wrapped (`jailbreak`) — proving
+      the round-robin cycling and strategy-transform layering both
+      work as intended. Restored the target's original config
+      afterward. `tsc --noEmit` and the production `vite build` both
+      passed clean.
