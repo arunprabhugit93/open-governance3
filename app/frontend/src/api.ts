@@ -160,6 +160,9 @@ export interface EvalStageConfigPayload {
     // Real promptfoo's test.options.storeOutputAs — stores this case's real output into a named
     // register, available as a template var in every LATER test case in the same run.
     storeOutputAs?: string;
+    // Real promptfoo's test.providerOutput — when set, completely skips the provider call and
+    // grades directly against this fixed text (no cost/latency).
+    providerOutput?: string;
   }>;
   promptTemplate: string;
   injectVar: string;

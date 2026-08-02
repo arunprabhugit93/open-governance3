@@ -3952,3 +3952,63 @@ this loop, not an unlimited test double.
       behavior work correctly together. Restored the target's original
       single prompt template and single test case afterward. `tsc
       --noEmit` and the production `vite build` both passed clean.
+
+## Change log — iteration 78 (eval: providerOutput to skip the provider call; self-caught regression)
+
+96. Added real promptfoo's `test.providerOutput` — a top-level test
+    field (not nested in `options`) that completely bypasses the
+    actual provider call and grades directly against a fixed text
+    instead (`evaluator.ts`:
+    `response = test.providerOutput ? {output: test.providerOutput, tokenUsage: empty, cost: 0} : await callActiveProvider(...)`).
+    Useful for testing/debugging assertion rules without spending API
+    calls, or regression-testing a known historical output against a
+    new assertion. This product always called the real provider for
+    every test case, with no way to skip it.
+    - Added `testCase.providerOutput`, threaded through
+      `buildEvalTests` (as a top-level test field, matching real
+      promptfoo's schema shape — not `options.providerOutput`) and
+      `normalizeDatasetRows`.
+    - `executeEvalRun`'s task execution now checks
+      `task.test?.providerOutput !== undefined` before any cache
+      lookup or provider call, synthesizing a zero-cost result
+      directly from the fixed text when set.
+    - Added a "Fixed provider output (optional)" field to the eval
+      test-case editor. Extended `EvalStageConfigPayload.testCases[]`
+      in `api.ts`.
+    - **Caught and fixed a real regression of my own making during
+      live verification, immediately, before moving on**: the initial
+      edit accidentally deleted the pre-existing
+      `const cached = cacheEnabled ? await readEvalCache(...) : null;`
+      declaration while restructuring the surrounding `if` chain to
+      insert the new `providerOutput` branch — `node -c` and the
+      build both passed clean (a dropped `const` in a conditional
+      branch that only executes at runtime isn't a syntax error), but
+      the FIRST verification run (unrelated to `providerOutput`, just
+      re-confirming the untouched baseline test case still worked)
+      came back `pass: false, error: "cached is not defined"` — a
+      hard break of EVERY eval run in the product, not just the new
+      feature. Root-caused it immediately via the row's own `error`
+      field rather than assuming success from `node -c` and the build
+      alone, fixed by reintroducing the `cached` declaration
+      (restructured as `usesProviderOutput` + a conditional `cached`
+      lookup that's skipped entirely when `providerOutput` is set,
+      matching real promptfoo's own "no cache" semantics for this
+      field), restarted, and re-verified all three paths — normal
+      provider call, cache hit, and `providerOutput` bypass — pass
+      cleanly before considering this iteration done. This is the
+      exact reason this session's standing practice is to always
+      restart and hit the live server after every change rather than
+      trusting static checks alone; documenting the miss here rather
+      than glossing over it.
+    - Verified live against the real Groq-backed E2E reference
+      target: with `providerOutput` set to a distinctive synthetic
+      string, the row's `output` matched it exactly, `pass: true`,
+      and — proving no real call happened at all —
+      `latencyMs: 0`, `tokenUsage: null`, `rawResponse: null` (a real
+      Groq call in this same session consistently shows non-zero
+      latency and real token usage). Restored the target's original
+      single test case afterward and confirmed the baseline passes
+      with real `latencyMs`/no error, and separately confirmed the
+      pre-existing cache-hit path (iteration 62) still works correctly
+      across two consecutive cached runs. `tsc --noEmit` and the
+      production `vite build` both passed clean.

@@ -1991,6 +1991,19 @@ function EvalWorkspace({
                   something it said earlier. Forces sequential (non-concurrent) execution for the whole run when used.
                 </p>
               </div>
+              <div className="field span-2">
+                <label>Fixed provider output (optional)</label>
+                <textarea
+                  value={testCase.providerOutput || ''}
+                  onChange={(event) => updateTestCase(index, { providerOutput: event.target.value || undefined })}
+                  placeholder="Skips calling the provider — grades directly against this text"
+                />
+                <p className="field-help">
+                  When set, this case never calls the provider at all (no cost, no latency) — assertions grade
+                  directly against this fixed text instead. Useful for testing assertion rules in isolation, or
+                  regression-testing a known past response.
+                </p>
+              </div>
               <div className="assertion-editor span-3">
                 <div className="row-toolbar">
                   <strong>Assertions</strong>

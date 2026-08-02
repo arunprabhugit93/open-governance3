@@ -592,6 +592,7 @@ function normalizeDatasetRows(rows) {
     transform: row.transform || row.options?.transform || undefined,
     rubricPrompt: row.rubricPrompt || row.options?.rubricPrompt || undefined,
     storeOutputAs: row.storeOutputAs || row.options?.storeOutputAs || undefined,
+    providerOutput: row.providerOutput || undefined,
     // Real promptfoo's test-level `threshold` — overrides the default all-assertions-must-pass
     // logic with "pass iff weighted-average assertion score >= threshold" (see executeEvalRun).
     // Was previously dropped here entirely, silently losing it on import from a real config.
@@ -1129,6 +1130,11 @@ function buildEvalTests(target) {
       },
       assert: [...baseAssertions, ...normalizeAssertions(testCase.assertions, testCase.assertion, testCase.expected)],
       metadata: testCase.metadata || undefined,
+      // Real promptfoo's test.providerOutput — a top-level test field (not nested in options)
+      // that completely skips the actual provider call and grades directly against this fixed
+      // text instead. Useful for testing/debugging assertions without spending API calls, or
+      // regression-testing a known historical output against a new assertion rule.
+      providerOutput: testCase.providerOutput || undefined,
       options: (testCase.transform || testCase.rubricPrompt || testCase.storeOutputAs)
         ? {
             ...(testCase.transform ? { transform: testCase.transform } : {}),
@@ -4176,8 +4182,14 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
     try {
       let latencyMs;
       let cacheHit = false;
-      const cached = cacheEnabled ? await readEvalCache(target.id, cacheKey) : null;
-      if (cached) {
+      // Real promptfoo's test.providerOutput completely bypasses the provider — no call, no
+      // cache read/write, no cost/latency at all — and grades directly against this fixed text.
+      const usesProviderOutput = task.test?.providerOutput !== undefined;
+      const cached = !usesProviderOutput && cacheEnabled ? await readEvalCache(target.id, cacheKey) : null;
+      if (usesProviderOutput) {
+        result = { output: task.test.providerOutput, tokenUsage: null, finishReason: null, rawResponse: null };
+        latencyMs = 0;
+      } else if (cached) {
         cacheHit = true;
         result = {
           output: cached.output,
