@@ -3773,3 +3773,62 @@ this loop, not an unlimited test double.
       work as intended. Restored the target's original config
       afterward. `tsc --noEmit` and the production `vite build` both
       passed clean.
+
+## Change log — iteration 75 (eval: custom rubric prompt for model-graded assertions)
+
+93. A different subsystem than the last several iterations (eval
+    grading, not red-team plugin config), but the same underlying
+    class of gap: real promptfoo's `test.options.rubricPrompt`
+    ("An external mapping...") FULLY REPLACES the default LLM-judge
+    grading prompt template for `llm-rubric`/`model-graded-factuality`
+    /`model-graded-closedqa`/`g-eval` assertions
+    (`matchers/rubric.ts` `loadRubricPrompt`/`renderLlmRubricPrompt` —
+    falls back to a built-in default only when unset, otherwise
+    Nunjucks-renders the custom template with `{vars, output, rubric}`
+    and sends THAT to the judge). This product's
+    `evaluateModelGradedAssertion`/`modelGradedPrompt` always built one
+    fixed JSON grading prompt for every model-graded assertion, with
+    no way to customize what's actually sent to the judge — e.g. a
+    different scoring scale, extra domain context, or a different
+    output language.
+    - Added `testCase.rubricPrompt` (test-level, same pattern as the
+      existing `testCase.transform` → `test.options.transform`),
+      threaded through both `buildEvalTests` (live execution) and
+      `normalizeDatasetRows` (config save/import), preserved
+      round-trip on import from a real promptfoo config too
+      (`row.options?.rubricPrompt` fallback, matching the `transform`
+      field's own import fallback).
+    - `modelGradedPrompt()` now renders `context.rubricPrompt` (when
+      set) via the existing `applyTemplate()` Nunjucks helper with
+      `{...vars, output, rubric: criterion, prompt}` — matching real
+      promptfoo's own template-variable shape — instead of the fixed
+      JSON structure; falls back to the original behavior when unset,
+      byte-for-byte unchanged.
+    - Added a "Custom rubric prompt (optional, JSON or plain text)"
+      textarea to the eval test-case editor. Extended
+      `EvalStageConfigPayload.testCases[]` in `api.ts`.
+    - Verified live and about as unambiguously as this session gets:
+      this target's judge was disabled by default (no prior real
+      verification target for model-graded grading existed), so
+      temporarily enabled it — reusing the eval provider's own
+      already-encrypted API key by referencing its existing
+      `apiKeySecretId` directly rather than re-entering or exposing
+      any raw key — pointed at the same real Groq endpoint/model. Set
+      an `llm-rubric` assertion with a `rubricPrompt` instructing the
+      judge to ignore the actual output and criterion entirely and
+      always return a specific, arbitrary literal marker string
+      (`CUSTOM_RUBRIC_MARKER_XYZ123`) that the real default grading
+      prompt could never produce. Ran a real eval and confirmed the
+      row's assertion result showed exactly
+      `reason: "CUSTOM_RUBRIC_MARKER_XYZ123"`,
+      `evaluator: "judge-model"`, and a `rawJudgeOutput` matching the
+      custom instruction precisely — definitive proof the custom
+      template, not the default, was what actually reached the real
+      judge. (Also caught and cleaned up a stray leftover server
+      process from an earlier iteration's incomplete restart that was
+      silently serving stale pre-fix code on the same port during
+      initial testing — confirmed via `ps`/`lsof`, not guessed.)
+      Restored the target's original single-assertion config and
+      disabled the judge again afterward, confirmed the baseline
+      passes as before. `tsc --noEmit` and the production `vite build`
+      both passed clean.

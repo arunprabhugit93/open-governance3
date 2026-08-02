@@ -586,6 +586,7 @@ function normalizeDatasetRows(rows) {
     tags: Array.isArray(row.tags) ? row.tags : [],
     metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : undefined,
     transform: row.transform || row.options?.transform || undefined,
+    rubricPrompt: row.rubricPrompt || row.options?.rubricPrompt || undefined,
     // Real promptfoo's test-level `threshold` — overrides the default all-assertions-must-pass
     // logic with "pass iff weighted-average assertion score >= threshold" (see executeEvalRun).
     // Was previously dropped here entirely, silently losing it on import from a real config.
@@ -1123,7 +1124,14 @@ function buildEvalTests(target) {
       },
       assert: [...baseAssertions, ...normalizeAssertions(testCase.assertions, testCase.assertion, testCase.expected)],
       metadata: testCase.metadata || undefined,
-      options: testCase.transform ? { transform: testCase.transform } : undefined,
+      options: (testCase.transform || testCase.rubricPrompt)
+        ? {
+            ...(testCase.transform ? { transform: testCase.transform } : {}),
+            // Real promptfoo's test.options.rubricPrompt — fully replaces the default judge
+            // grading prompt for llm-rubric/model-graded-* assertions on this test.
+            ...(testCase.rubricPrompt ? { rubricPrompt: testCase.rubricPrompt } : {}),
+          }
+        : undefined,
       threshold: Number.isFinite(Number(testCase.threshold)) ? Number(testCase.threshold) : undefined,
     }));
   }
@@ -1898,12 +1906,25 @@ function parseJudgeResult(value, threshold) {
 }
 
 function modelGradedPrompt(assertionType, output, assertion, context) {
+  const criterion = assertion.value || assertion.expected || assertion.rubric || '';
+  // Real promptfoo's test.options.rubricPrompt fully replaces the default grading prompt
+  // template (matchers/rubric.ts loadRubricPrompt/renderLlmRubricPrompt) — rendered with the
+  // same {vars, output, rubric} shape it uses, via this file's own Nunjucks templater. Falls
+  // back to the raw template on a render error, same as every other applyTemplate() call site.
+  if (context.rubricPrompt) {
+    return applyTemplate(String(context.rubricPrompt), {
+      ...(context.vars || {}),
+      output: String(output || ''),
+      rubric: criterion,
+      prompt: context.prompt || '',
+    });
+  }
   return JSON.stringify(
     {
       instruction:
         'Grade the model output for this assertion. Respond only as JSON: {"pass": boolean, "score": number between 0 and 1, "reason": string}.',
       assertionType,
-      criterion: assertion.value || assertion.expected || assertion.rubric || '',
+      criterion,
       prompt: context.prompt || '',
       vars: context.vars || {},
       output: String(output || ''),
@@ -4141,6 +4162,7 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
               tokenUsage: result.tokenUsage,
               finishReason: result.finishReason,
               providerResponse: result,
+              rubricPrompt: task.test?.options?.rubricPrompt,
             })),
           });
         } catch (error) {

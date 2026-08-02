@@ -1964,6 +1964,20 @@ function EvalWorkspace({
                   instead of requiring every assertion to pass individually.
                 </p>
               </div>
+              <div className="field span-3">
+                <label>Custom rubric prompt (optional, JSON or plain text)</label>
+                <textarea
+                  value={testCase.rubricPrompt || ''}
+                  onChange={(event) => updateTestCase(index, { rubricPrompt: event.target.value || undefined })}
+                  placeholder={'{"instruction": "Grade strictly.", "criterion": "{{rubric}}", "output": "{{output}}"}'}
+                />
+                <p className="field-help">
+                  Replaces the default judge prompt for this case's <code>llm-rubric</code>/<code>model-graded-*</code>{' '}
+                  assertions. Rendered as a template with <code>output</code>, <code>rubric</code> (the assertion's
+                  criterion text), <code>prompt</code>, and this case's vars in scope — the judge must still be
+                  instructed to return JSON with <code>pass</code>/<code>score</code>/<code>reason</code>.
+                </p>
+              </div>
               <div className="assertion-editor span-3">
                 <div className="row-toolbar">
                   <strong>Assertions</strong>
