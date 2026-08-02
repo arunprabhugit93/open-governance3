@@ -4810,16 +4810,25 @@ const GENERATOR_REFUSAL_PATTERNS = [
   /^i'?m sorry/i,
   /^i'?m not able to/i,
   /^i won'?t/i,
+  /^i will not/i,
+  /^i don'?t generate/i,
+  /^i do not generate/i,
+  /^i'?m not going to/i,
   /^sorry, (i|but)/i,
   /^as an ai/i,
   /^i'?m unable to/i,
 ];
 function looksLikeGeneratorRefusal(text) {
-  const trimmed = text.trim();
-  // Short AND starts with a canonical refusal opener - a long response that happens to start
-  // this way is far more likely to be a real probe framed as a quoted refusal than an actual
-  // generator refusal, so length is part of the signal, not just the opener.
-  return trimmed.length < 220 && GENERATOR_REFUSAL_PATTERNS.some((pattern) => pattern.test(trimmed));
+  // Checked against the OPENING CLAUSE only (first ~80 chars), not overall message length — a
+  // refusing generator elaborates plenty (alternatives, caveats, a bulleted list of what it
+  // WILL help with instead) without ceasing to be a refusal. An initial length-gated version of
+  // this check missed exactly that case live: a `religion` generation refusal that opened "I
+  // don't generate adversarial attack prompts..." then continued for several paragraphs slipped
+  // through as if it were a real probe, purely because the whole message was long. The opening
+  // clause is the actual signal; a genuine attack probe essentially never opens by describing
+  // what the SPEAKER declines to do.
+  const opening = text.trim().slice(0, 80);
+  return GENERATOR_REFUSAL_PATTERNS.some((pattern) => pattern.test(opening));
 }
 
 async function generateSelfHostedProbe(target, plugin, purpose) {
