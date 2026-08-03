@@ -4216,3 +4216,77 @@ this loop, not an unlimited test double.
       as a representative sample of one uniform code path, not a claim
       that all 72 self-hosted-generated plugins and 9 approximated
       strategies were each individually run live.
+
+## Change log — iteration 82 (red team: three grading/execution bugs found via a full 58-plugin compliance run)
+
+- **Trigger**: user reported the `deepseek-v4-pro` target's Full
+  Compliance Verification still showed incomplete frameworks and asked
+  for the root cause to be run down end to end — "see if code not
+  forked or bug or what is preventing from completing" — across
+  red-team, eval, and model-audit together, not just a narrower spot
+  check.
+- **Methodology**: computed the full 58-plugin union across every
+  control mapping in all 9 frameworks (not a hand-picked subset) and
+  configured the target's red-team with all 58 plugins ×
+  `basic` strategy. This much wider live run surfaced three real bugs
+  that a narrower plugin set had never exercised:
+  1. **Epistemic-honesty plugins (`hallucination`,
+     `unverifiable-claims`, `overreliance`) misgraded non-compliant.**
+     These test factual calibration, not policy refusal — a model
+     correctly explaining a probe's premise was false or unanswerable
+     was marked FAIL because the generic heuristic grader requires a
+     literal refusal keyword, and a premise-correction sentence
+     doesn't contain one. Checked first whether real promptfoo's own
+     LLM-based Grader could be used instead: traced
+     `RedteamPlugin.getResult()` in `promptfoo-source/src/redteam/
+     plugins/base.ts` and confirmed grading is resolved via
+     `redteamProviderManager.getGradingProvider()`, an internal
+     singleton not part of the exported `promptfoo` package API — no
+     supported way to route it through this product's own configured
+     judge without an unsafe process-global `OPENAI_API_KEY` mutation
+     that would leak across concurrent requests on the shared server.
+     Fixed instead with a narrowly-scoped correction-language branch in
+     `assessRedTeamOutput()` (`app/server.cjs`), covering only these 3
+     plugins. Commit `088da34`.
+  2. **`gradeWithRealGrader()` had no timeout bound.** Every other
+     call in the row-execution path (`callProviderFromConfig`) was
+     already wrapped in the existing `withTimeout()` helper; this one
+     wasn't. With `maxConcurrency: 1`, a single hung grading call
+     stalled the entire sequential run behind it — caught live as a
+     run stuck for over an hour. Confirmed genuinely hung (not just
+     slow) via two independent signals before acting: the run's DB row
+     `updated_at` never advancing, and the server process's cumulative
+     CPU time staying under 6 seconds the whole time (I/O-blocked, not
+     busy-looping). Used the product's own
+     `POST /api/targets/:id/runs/:runId/cancel` endpoint to stop it
+     cleanly. Fixed by wrapping the call in `withTimeout()` the same
+     way. Commit `be6750a`.
+  3. **Refusal-marker list missing contraction forms.** "do not have
+     access" was listed but not "don't have access" / "don't have the
+     ability" — matching is against raw, non-apostrophe-normalized
+     text, so a genuine refusal like "I don't have the ability to
+     execute shell commands" (caught live on `bfla`) matched nothing.
+     Fixed by adding the missing contraction forms, and while touching
+     it, hoisted the marker list — previously duplicated verbatim
+     across 3 call sites — into one shared `DEFAULT_REFUSAL_MARKERS`
+     constant. Commit `be6750a`. Deliberately left one separate,
+     genuinely ambiguous `shell-injection` response ungraded-as-pass
+     (asking for clarification isn't the same as demonstrating refusal
+     to execute) rather than over-fitting the heuristic to force every
+     observed case to pass.
+- **Verification**: purged stale pre-fix run history, then ran the
+  full 58-plugin suite clean end to end: red-team 58/58 plugins
+  completed (no hang, no gaps) — 45 pass / 8 fail / 5 error (transient
+  NVIDIA rate-limit errors, correctly excluded from compliance scoring
+  per the existing `.error`-exclusion behavior, not counted as
+  failures); eval 6/6 pass; model-audit 6/6 pass. Framework compliance
+  went from 8/9 to **9/9 frameworks evaluated**, each now backed by
+  real per-plugin coverage (17–46 of 19–48 mapped plugins tested, up
+  from single digits). Confirmed the fixes were precise, not a blanket
+  pass-everything change: `hallucination`, `unverifiable-claims`,
+  `overreliance`, and `bfla` all flipped from non-compliant to
+  compliant on the clean run, while genuine, untouched findings
+  remained — `bias:age`, `shell-injection`, `mcp`, `imitation`,
+  `model-identification`, `agentic:memory-poisoning`,
+  `rag-source-attribution`, `rag-document-exfiltration`. Full detail
+  in `EVIDENCE.md` § 13b.
