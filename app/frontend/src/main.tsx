@@ -346,53 +346,143 @@ const emptyWorkflowCatalog: WorkflowCatalogResponse = {
 function Shell({
   children,
   onRegistry,
+  onOnboard,
   onUsers,
   onTokens,
   onLogout,
   isAdmin,
+  view,
+  user,
 }: {
   children: React.ReactNode;
   onRegistry: () => void;
+  onOnboard: () => void;
   onUsers?: () => void;
   onTokens?: () => void;
   onLogout: () => void;
   isAdmin?: boolean;
+  view: View;
+  user: User | null;
 }) {
+  const isAdminUser = isAdmin ?? user?.role === 'admin';
+  const initials = user
+    ? user.email
+        .split('@')[0]
+        .split(/[._-]+/)
+        .map((part) => part[0])
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('')
+        .toUpperCase()
+    : 'OG';
+  const pageTitle =
+    view === 'registry' || view === 'detail'
+      ? 'Registry'
+      : view === 'onboard'
+        ? 'Onboarding'
+        : view === 'users'
+          ? 'User management'
+          : 'API tokens';
+
   return (
     <section className="app-shell">
-      <header className="topbar">
-        <div className="topbar-left">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
           <div className="mark">OG</div>
-          <div>
-            <p className="eyebrow">Open Governance</p>
-            <p className="topbar-title">Assurance control plane</p>
+          <div className="brand-copy">
+            <p className="brand-name">Open Governance</p>
+            <p className="brand-sub">Assurance control plane</p>
           </div>
-          {isAdmin === false ? (
-            <span className="badge viewer-badge" title="Viewer accounts can browse everything but can't run, save, or delete anything — those actions will be blocked.">
-              Viewer (read-only)
-            </span>
-          ) : null}
         </div>
-        <div className="topbar-actions">
-          <button className="secondary-button" type="button" onClick={onRegistry}>
+        <nav className="sidebar-nav" aria-label="Primary">
+          <p className="nav-section-label">Workspace</p>
+          <button
+            className={`nav-item${view === 'registry' || view === 'detail' ? ' active' : ''}`}
+            type="button"
+            onClick={onRegistry}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="2" y="2" width="5" height="5" rx="1" />
+              <rect x="9" y="2" width="5" height="5" rx="1" />
+              <rect x="2" y="9" width="5" height="5" rx="1" />
+              <rect x="9" y="9" width="5" height="5" rx="1" />
+            </svg>
             Registry
           </button>
-          {isAdmin && onUsers ? (
-            <button className="secondary-button" type="button" onClick={onUsers}>
-              Users
-            </button>
-          ) : null}
-          {isAdmin && onTokens ? (
-            <button className="secondary-button" type="button" onClick={onTokens}>
-              API tokens
-            </button>
-          ) : null}
-          <button className="ghost-button" type="button" onClick={onLogout}>
-            Sign out
+          <button
+            className={`nav-item${view === 'onboard' ? ' active' : ''}`}
+            type="button"
+            onClick={onOnboard}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="8" cy="8" r="6" />
+              <path d="M8 5.5v5M5.5 8h5" />
+            </svg>
+            Onboard model
           </button>
+          {isAdminUser ? (
+            <>
+              <p className="nav-section-label">Administration</p>
+              <button
+                className={`nav-item${view === 'users' ? ' active' : ''}`}
+                type="button"
+                onClick={onUsers}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="8" cy="5.5" r="2.5" />
+                  <path d="M3 13.5c.6-2.4 2.6-3.5 5-3.5s4.4 1.1 5 3.5" />
+                </svg>
+                Users
+              </button>
+              <button
+                className={`nav-item${view === 'tokens' ? ' active' : ''}`}
+                type="button"
+                onClick={onTokens}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="5.5" cy="10.5" r="3" />
+                  <path d="M7.5 8.5 13 3M10.5 5.5l1.5 1.5M8.5 7.5l1.5 1.5" />
+                </svg>
+                API tokens
+              </button>
+            </>
+          ) : null}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="user-chip">
+            <span className="avatar">{initials}</span>
+            <span className="user-copy">
+              <span className="user-name">{user?.email ?? 'Signed out'}</span>
+              <span className="user-role">{isAdminUser ? 'Administrator' : 'Viewer'}</span>
+            </span>
+            <button className="icon-button" type="button" onClick={onLogout} aria-label="Sign out" title="Sign out">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6.5 2.5H4a1.5 1.5 0 0 0-1.5 1.5v8A1.5 1.5 0 0 0 4 13.5h2.5" />
+                <path d="M10.5 5.5 13.5 8l-3 2.5M13.5 8H7" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </header>
-      <div className="content">{children}</div>
+      </aside>
+      <div className="app-frame">
+        <header className="topbar">
+          <div className="topbar-left">
+            <p className="eyebrow">Open Governance</p>
+            <p className="topbar-title">{pageTitle}</p>
+          </div>
+          <div className="topbar-actions">
+            {isAdminUser === false ? (
+              <span className="badge viewer-badge" title="Viewer accounts can browse everything but can't run, save, or delete anything — those actions will be blocked.">
+                Viewer (read-only)
+              </span>
+            ) : null}
+            <button className="ghost-button" type="button" onClick={onLogout}>
+              Sign out
+            </button>
+          </div>
+        </header>
+        <div className="content">{children}</div>
+      </div>
     </section>
   );
 }
@@ -5620,7 +5710,14 @@ function App() {
 
   if (!catalog) {
     return (
-      <Shell onRegistry={goRegistry} onLogout={handleLogout}>
+      <Shell
+      onRegistry={goRegistry}
+      onOnboard={goOnboard}
+      isAdmin={user.role === 'admin'}
+      view={view}
+      user={user}
+      onLogout={handleLogout}
+    >
         <section className="panel">
           <p className="muted">Loading registry...</p>
         </section>
@@ -5631,9 +5728,12 @@ function App() {
   return (
     <Shell
       onRegistry={goRegistry}
+      onOnboard={goOnboard}
       onUsers={goUsers}
       onTokens={goTokens}
       isAdmin={user.role === 'admin'}
+      view={view}
+      user={user}
       onLogout={handleLogout}
     >
       {view === 'registry' ? (
