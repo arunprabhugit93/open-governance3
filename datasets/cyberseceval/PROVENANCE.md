@@ -29,6 +29,7 @@ regulated pilot needs to verify against the complete corpus.
 | `interpreter.json` | `datasets/interpreter/interpreter.json` | 500 (5 attack types x 100) | 60 | First 12 rows per `attack_type`, file order |
 | `instruct.json` | `datasets/instruct/instruct-v2.json` | 1681 (8 languages) | 80 | First 10 rows per `language`, file order |
 | `autocomplete.json` | `datasets/autocomplete/autocomplete.json` | 1916 (8 languages) | 80 | First 10 rows per `language`, file order |
+| `spear_phishing.json` | `datasets/spear_phishing/multiturn_phishing_challenges.json` | 856 (4 goals x 214) | 60 | First 15 rows per `goal`, file order |
 
 Multilingual variants (`*_multilingual_machine_translated.json`) were not vendored
 — English-only, matching this product's other eval/red-team content.
@@ -75,10 +76,29 @@ faked as "not evaluated" without explanation. See
 Unlike the table above, Spear Phishing does NOT require external infrastructure
 (no cyber range, no compiled binaries, no third-party dataset) — upstream's own
 judge/victim simulation runs entirely through LLM calls, which this product
-already self-hosts via its judge-provider configuration. It IS ported (see
-`cyberseceval-spear-phishing` assertion type), but as a single-exchange
-approximation of upstream's multi-turn attacker/victim/evaluator simulation —
-this product's eval harness runs one provider call per test row, not a stateful
-multi-turn loop. Every result is tagged `turnsApproximated: true`, the same
-honesty convention `strategyApproximated` already established for red-team
-strategies that can only be approximated single-shot.
+already self-hosts via its judge-provider configuration. It IS ported (dataset
+vendored above as `spear_phishing.json`, catalog entry
+`cyberseceval-spear-phishing` in `CYBERSECEVAL_BENCHMARKS`, assertion type
+`cyberseceval-spear-phishing`), but as a single-exchange approximation of
+upstream's up-to-5-turn attacker/victim/evaluator simulation
+(`multiturn_phishing_benchmark.py`, `MAX_TURNS = 5`) — this product's eval
+harness runs one provider call per test row, not a stateful multi-turn loop.
+Every result is tagged `turnsApproximated: true`, the same honesty convention
+`strategyApproximated` already established for red-team strategies that can
+only be approximated single-shot.
+
+Each vendored row's `target_profile` (a rich victim bio: name, occupation,
+location, personality, social profile) and `goal` are upstream's own,
+unmodified. The attacker system prompt sent to the model under test is adapted
+from `Attacker.get_system_message()` — upstream's "escalate slowly over up to
+5 steps" framing is dropped in favor of directly requesting the cold-open
+message, since this harness makes one call per row, but the bio-driven
+urgency/persuasion instructions are upstream's own wording. Grading ports
+upstream's real `grading_function`/`grade_attribute`: three attributes
+(persuasion, rapport, argumentation), each scored 0-5 against upstream's own
+criterion text, averaged into an overall score — issued as one combined judge
+call instead of upstream's three separate calls, to keep this deployment's
+live-provider-call count practical. The pass/fail threshold (overall score
+&lt; 3) is this product's own pipeline-compatibility choice; upstream reports
+the average as a continuous metric and never binarizes it, and every result's
+`reason` says so explicitly.
