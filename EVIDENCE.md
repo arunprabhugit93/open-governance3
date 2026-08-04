@@ -942,3 +942,235 @@ code-review-only benchmarks now have real live runs, autocomplete's distinct
 `codeBefore` logic has been proven both directly and live, and a genuine
 production reliability bug affecting self-hosted slow-model deployments was
 found and fixed in the course of doing this work.
+
+## 16. Lineage — forked, self-hosted Langfuse as the AI supply-chain lineage backbone
+
+**Scope**: forked Langfuse (`langfuse/langfuse`, source commit
+`9ea1d895a71ac6954caf496235cefe4dfe23b39e`) into `langfuse-source/` and stood
+it up as a genuinely self-hosted, zero-external-call backing store for a new
+cross-cutting lineage capability — not a new stage. A target-detail "Lineage"
+view (matching how "Evidence" is a view over other stages, not a stage
+runner) shows the full backward chain (model artifact, training provenance,
+prompt versions, datasets) and forward chain (every red-team/eval/model-audit/
+CyberSecEval run, every inference call, RAG retrieval context, agent tool
+calls) for a target, resolved live from Langfuse via this product's own
+`GET /api/targets/:id/lineage`, rendered in this product's own UI, exported in
+all 5 evidence formats — an auditor never leaves this product or sees
+Langfuse's own UI.
+
+**Fork and licensing** (`langfuse-source/PROVENANCE.md`, written first,
+appended to as issues surfaced): core is MIT; `ee/`, `web/src/ee/`,
+`worker/src/ee/`, `packages/shared/src/server/ee/` are vendored verbatim
+under Langfuse's separate Enterprise License purely because the TypeScript
+build doesn't compile without them (open-core architecture — dozens of core
+files statically import from `ee/`) — never license-keyed, so every
+Enterprise feature stays inert. `LANGFUSE_EE_LICENSE_KEY` verified to be a
+pure local string-prefix check (`getPlan.ts`) with no network call in the
+non-`ee/` path at all. `TELEMETRY_ENABLED=false` (Langfuse's own real
+opt-out) and `TURBO_TELEMETRY_DISABLED=1` (patched into both Dockerfiles —
+build-time only, found while reading the build logs) both set. CSP
+(`web/next.config.mjs`) patched to strip every Langfuse-cloud/PostHog/
+Sentry/Stripe/Cloudflare/Microsoft host, leaving only `'self'`.
+
+**Self-hosted deployment** (`docker-compose.langfuse.yml`): reuses this
+product's *existing* Postgres for Langfuse's transactional data, isolated
+into its own `langfuse` Postgres schema via Prisma's `?schema=` connection
+param — a `langfuse-schema-init` one-shot service creates the schema before
+Prisma's own `migrate deploy` runs (verified live: `429 migrations found...
+No pending migrations to apply` on the second boot). ClickHouse, Redis, and
+MinIO are new infrastructure this capability genuinely requires (documented,
+not hidden) — MinIO as the self-hosted S3-compatible object store, never AWS
+S3. `langfuse-web`/`langfuse-worker` are **built from the vendored source**
+(`docker compose build`), not pulled as prebuilt images, so what actually
+runs is the exact reviewed/patched code. Both bound to `127.0.0.1` only and
+never linked from this product's own frontend.
+
+**Two real bugs found and fixed while first booting this deployment**
+(both documented in `PROVENANCE.md` as they were found, live, not
+after-the-fact):
+1. The Windows git checkout that vendored the source converted all 19
+   `.sh` files to CRLF line endings, breaking every shebang
+   (`#!/bin/sh\r`) — both `langfuse-web` and `langfuse-worker` crash-looped
+   with `./web/entrypoint.sh: No such file or directory` on every boot.
+   Root-caused (not worked around), fixed by stripping CRLF from all 19
+   files and adding `.gitattributes` (`*.sh text eol=lf`) so a future
+   Windows re-checkout can't reintroduce it, then rebuilt both images.
+2. Live ingestion smoke test returned `"Event type not accepted... this
+   endpoint only accepts score and log events"` — this Langfuse version's
+   default `LANGFUSE_MIGRATION_V4_WRITE_MODE=events_only` rejects
+   `trace-create`/`span-create`/`generation-create`/etc. outright, routing
+   v4's target state through the OTel endpoint instead. Since this is a
+   self-hosted deployment this product fully owns, set
+   `LANGFUSE_MIGRATION_V4_WRITE_MODE=legacy` (a real, still-validated enum
+   value, not a hack) paired with the required
+   `LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR=dual_write` (worker startup
+   hard-errors on `legacy` + the default `direct` OTel behavior). Re-tested
+   live after: `{"successes":[{"id":"test-event-1","status":201}],
+   "errors":[]}`, then confirmed a full write→read round trip via
+   `GET /api/public/sessions/smoke-session` returning the exact trace just
+   ingested.
+
+**Instrumentation** (`app/shared/lineage.cjs`, additive only — every emit
+function is fire-and-forget from the caller's perspective, and every emit
+gates on `isLineageConfigured()` so a target with Langfuse unconfigured or
+down behaves identically to before this capability existed):
+- **Provider-call chokepoint**: `callProviderAdapter` (the single dispatch
+  point for all 11 provider bridges — openai-compatible, azure-openai,
+  anthropic, cohere, gemini, http-json, graphql, websocket-chat,
+  browser-chatbot, cli-provider, custom-script, promptfoo-library) wrapped
+  once, covering every inference call this product performs including
+  CyberSecEval judge calls, red-team generation, and eval runs — not 11
+  separate edits.
+- **Context propagation without touching any call site in between**:
+  `lineage.runWithLineageContext` (Node's `AsyncLocalStorage`) established
+  once in `executeStoredStageRun`, read by `callProviderAdapter` and the
+  eval per-row loop — the dozens of intermediate functions between a stage
+  run's entry point and an individual provider call needed zero changes.
+- **Stage runs**: `executeStoredStageRun` emits a trace + SPAN at start,
+  updates the SPAN with `endTime`/output/`assuranceEvidence` (pass/fail/
+  error/total) at completion — one seam covering eval, red-team, and
+  model-audit run start+end (CyberSecEval flows through the eval path,
+  already covered).
+- **Target lifecycle**: onboarding (`POST /api/targets`, captures
+  `TrainingProvenance` at creation), provider-config/prompt updates
+  (`PATCH /api/targets/:id`), the eval stage's `promptTemplate` update
+  (`PATCH .../stages/eval/config`, only fires when the template actually
+  changed), dataset save/activate (both routes), schedule-triggered runs
+  (tagged via `runOptions.triggeredBy`/pre-existing
+  `trigger: 'manual-schedule'`), and evidence export (all export routes).
+- **RAG retrieval context**: fires inside `executeEvalRun`'s per-row loop
+  whenever a test case carries `vars.context` — reuses the exact field
+  `resolveRagContext()` already reads for context-recall/-relevance/
+  -faithfulness assertions, not a new convention.
+- **Agent tool calls**: fires inside the `callProviderAdapter` wrap by
+  reusing this product's existing `extractToolCalls()` (already used by
+  `is-tool-call`-style assertions) against the real raw provider response —
+  same extraction logic, not a parallel implementation.
+
+**AI-native facets** — honestly attested, matching model-audit's
+"not evaluated, never faked" precedent:
+- **ModelArtifact**: model name, provider, adapter, base URL — on every
+  GENERATION observation.
+- **TrainingProvenance**: `buildTrainingProvenance()` in `lineage.cjs`.
+  Self-hosted/open-weights providers (ollama, vllm, lm-studio, huggingface,
+  custom-script, cli-provider) get `attestationSource: 'operator-provided'`,
+  `unattested: true` by default (real gap, honestly labeled) unless the
+  operator supplied a real card URL/dataset ref at onboarding. Closed-vendor
+  providers (openai, anthropic, azure-openai, gemini, cohere, bedrock,
+  vertex) get `attestationSource: 'vendor-published'` pointing at that
+  vendor's real, stable public docs root — `unattested: true` regardless,
+  since no model-card content is actually fetched or parsed, only the
+  vendor identity is known. Zero fabricated model-card content anywhere.
+- **PromptVersion**: the eval stage's `promptTemplate`, verbatim, at every
+  change.
+- **RetrievalContext**: query + retrieved content, per RAG test row.
+- **AssuranceEvidence**: pass/fail/error/total threaded onto every stage
+  run's SPAN, linking it to the same categories/controls
+  `frameworks.cjs`/`computeFrameworkCompliance` already attribute.
+
+**Query endpoint**: `GET /api/targets/:id/lineage` — not
+`/stages/lineage/...`, no new stage runner. Calls Langfuse's own
+`GET /sessions/{sessionId}` (sessionId = target id, Langfuse's native
+session-grouping concept doing the "give me this target's full history"
+job with zero invented foreign-key scheme) then
+`GET /traces/{traceId}` per trace for full observation detail, assembles a
+`{graph: {nodes, edges}, trainingProvenance, promptVersions, datasets, runs,
+inferenceCalls, retrievalContexts, toolCalls, exports}` payload.
+
+**UI**: a real deviation from the task's suggested React Flow/Cytoscape
+choice, made after checking the actual codebase rather than assuming —
+`app/frontend/` turned out to be a fully-built (if never-`npm run build`'d)
+React app (`main.tsx`, ~5800 lines, one file per convention already
+established there), so `@xyflow/react` was added as an npm dependency
+(bundled by Vite at build time — no CDN load, no conflict with the
+zero-external-call requirement) and a `LineageWorkspace` component added
+following the exact pattern `EvidenceWorkspace` already establishes: a new
+`'lineage'` `StageKey` alongside `'evidence'`, a stage-card with an
+"Open workspace" button, no new route family. Renders the graph with a
+simple layered BFS-depth auto-layout (deliberately not a `dagre`-style
+dependency — the graph is shallow, target → traces → observations, rarely
+more than 3-4 levels) plus tabs for Provenance/Inference/Evidence detail.
+Frontend built (`npm run build`) and confirmed serving — the dedicated
+verification server's startup log lost its "no build output" fallback
+warning, meaning the real React app (not the legacy `app/web` static
+fallback) is what's actually live.
+
+**Exports**: all 5 formats gained a lineage section —
+- **JSON** (`GET /report`): `report.lineage` — cheap no-op
+  (`isLineageConfigured()` is a pure env check) when the capability isn't
+  configured, so zero added latency in that common case.
+- **Markdown/HTML**: `## Lineage` / `<h2>Lineage</h2>` sections with
+  training-provenance table, prompt-version/dataset/retrieval/tool-call
+  counts.
+- **CSV** (`runs.csv`, `framework-compliance.csv`): a second table
+  (blank-line-separated, own header) appended after the primary table —
+  the primary table's schema stays intact for spreadsheet/GRC tooling that
+  already reads it.
+- **YAML** (`engine-config.yaml`): a `#`-comment header (this file is a
+  real, loadable promptfoo config — an unrecognized top-level key would
+  break that, comments never do).
+
+**Live end-to-end verification** against three self-hosted targets (Ollama
+`qwen2.5:1.5b-instruct`, both target and judge, zero cloud calls anywhere in
+the path) covering all three target-type-specific facets:
+
+1. **Model target** (`4687a594-6780-4f48-8825-d4d5954fb263`): onboarding
+   trace carries real `trainingProvenance`
+   (`attestationSource: "operator-provided", unattested: true` — honest,
+   since no HF card was supplied). Eval run's GENERATION observation:
+   `model: "qwen2.5:1.5b-instruct"`, `input: {prompt: "Reply with exactly:
+   READY"}`, `output: "READY"` (the model's real response),
+   `usage: {input:26, output:2, total:28}` (real token counts). Stage-run
+   SPAN correctly updated after completion:
+   `assuranceEvidence: {pass:1, fail:0, error:0, total:1}`.
+2. **RAG target** (`591d7fb0-a204-4230-b1e0-3ad4ec6106c7`): RETRIEVER
+   observation captured real retrieved context —
+   `output: "Zornak is a fictional country. Its capital city is
+   Glimmerhold, founded in 1842."` against
+   `input: {query: "...capital of the fictional country Zornak?"}`. The
+   model itself failed to actually use the provided context in its answer
+   (a real 1.5B-model behavior quirk, not a lineage bug) — the lineage
+   system correctly recorded what context *was* available regardless of
+   whether the model used it.
+3. **Agent target** (`6ef218f8-47d0-466e-a934-1df15fa8cdbd`): prompted to
+   emit a tool call as JSON; the model complied
+   (`{"name": "search_docs", "arguments": {"query": "refund policy"}}`),
+   and the existing `extractToolCalls()` reuse correctly parsed it into a
+   TOOL observation: `name: "tool-call:search_docs"`,
+   `input: {query: "refund policy"}`.
+
+Confirmed the timing characteristic of async ingestion honestly rather than
+treating an initial `totalObservations: 1` (queried immediately after the
+run's HTTP response) as a false negative: Langfuse's own ingestion is
+genuinely async (POST returns 201 immediately, a worker processes the
+Redis-queued event into ClickHouse afterward) — re-querying moments later
+showed `totalObservations: 2` (Model) / `3` (RAG, Agent) with every
+GENERATION/RETRIEVER/TOOL observation present. This is a real
+characteristic of the capability (a lineage query made *immediately* after
+a run completes may be momentarily incomplete), not documented as
+instantaneous when it isn't.
+
+Export spot-checks confirmed the same real data flowing through: Markdown
+export's `## Lineage` section showed the identical training-provenance row;
+CSV export's appended `"Lineage"` block showed the identical metric counts
+and attestation row.
+
+**What this does NOT claim**: production inference traffic that never
+touches this product (explicitly out of scope per the task — belongs to a
+future runtime-guardrails capability). Langfuse's evaluation harness,
+prompt-authoring UI, and dashboards are not surfaced anywhere — only
+tracing/ingestion + the query API this capability actually needs. The
+`langfuse-web` container remains reachable at `127.0.0.1:3300` (bound to
+localhost, matching Langfuse's own upstream security guidance for every
+non-web service) but is never linked to from this product's own UI or
+exports.
+
+Result: **Pass** — Langfuse forked and genuinely self-hosted (built from
+source, zero external calls verified at the CSP/telemetry/license-check
+level), wired into the existing target-detail flow as a view (not a new
+stage), every event point instrumented additively, all five AI-native
+facets honestly attested with real vendor/operator provenance labeling,
+queryable via this product's own API, rendered in this product's own UI,
+exported in all 5 formats, and proven live end to end against real Model,
+RAG, and Agent targets with two genuine infrastructure bugs found and
+fixed along the way.

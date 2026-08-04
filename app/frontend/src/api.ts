@@ -9,6 +9,7 @@ import type {
   RunTraceRow,
   TargetExportPayload,
   TargetDataset,
+  TargetLineage,
   TargetReport,
   TargetSchedule,
   WorkflowCatalogResponse,
@@ -524,6 +525,10 @@ export function listTargetRuns(
 
 export function getTargetReport(token: string, id: string): Promise<TargetReport> {
   return request<TargetReport>(`/api/targets/${id}/report`, token);
+}
+
+export function getTargetLineage(token: string, id: string): Promise<TargetLineage> {
+  return request<TargetLineage>(`/api/targets/${id}/lineage`, token);
 }
 
 export function compareRuns(

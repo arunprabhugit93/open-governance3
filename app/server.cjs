@@ -32,6 +32,7 @@ const {
 } = require('./shared/workflow-catalog.cjs');
 const frameworksCatalog = require('./shared/frameworks.cjs');
 const cyberSecEval = require('./shared/cyberseceval.cjs');
+const lineage = require('./shared/lineage.cjs');
 const { Agent: UndiciAgent, setGlobalDispatcher } = require('undici');
 
 // Node's global fetch (used by every provider adapter's HTTP call, including CyberSecEval's
@@ -847,6 +848,11 @@ async function buildTargetReportPayload(targetId) {
       categoryStats,
     },
     engineConfigYaml: payload.promptfooConfigYaml,
+    // Lineage section — cheap no-op when the capability isn't configured (isLineageConfigured()
+    // is a pure env-var check, no network call), so this adds zero latency to the common
+    // Langfuse-not-set-up case. Every consumer of this report payload (JSON via /report,
+    // Markdown, HTML) picks this up from one place — see buildMarkdownReport/buildHtmlReport.
+    lineage: lineage.isLineageConfigured() ? await buildLineageGraph(payload.target) : { configured: false },
   };
 }
 
@@ -908,7 +914,69 @@ function buildMarkdownReport(report) {
     const summary = summaryFromRun(run);
     lines.push(`| ${run.createdAt} | ${run.stageKey} | ${run.status} | ${summary.pass} | ${summary.total} |`);
   }
+  lines.push('', '## Lineage', '');
+  const lineageSection = report.lineage;
+  if (!lineageSection?.configured) {
+    lines.push(
+      'Not configured: this deployment has no self-hosted Langfuse instance wired up. Lineage is an additive capability — its absence does not affect any other section of this report.',
+    );
+  } else if (!lineageSection.available) {
+    lines.push(`Unavailable: ${lineageSection.reason || 'the self-hosted Langfuse instance was unreachable when this report was generated.'}`);
+  } else {
+    lines.push(
+      `${lineageSection.summary?.totalTraces ?? 0} trace(s), ${lineageSection.summary?.totalObservations ?? 0} observation(s), ${lineageSection.summary?.totalRuns ?? 0} run(s), ${lineageSection.summary?.totalInferenceCalls ?? 0} inference call(s) recorded.`,
+      '',
+      '### Training provenance',
+      '',
+    );
+    if (!lineageSection.trainingProvenance?.length) {
+      lines.push('No training-provenance record found for this target.');
+    } else {
+      lines.push('| Attestation source | Unattested gap | Note |', '| --- | --- | --- |');
+      for (const entry of lineageSection.trainingProvenance) {
+        lines.push(`| ${markdownEscape(String(entry.attestationSource))} | ${entry.unattested ? 'Yes' : 'No'} | ${markdownEscape(String(entry.note || '')).slice(0, 200)} |`);
+      }
+    }
+    lines.push('', '### Prompt versions', '');
+    lines.push(lineageSection.promptVersions?.length ? `${lineageSection.promptVersions.length} prompt version change(s) recorded.` : 'No prompt-version changes recorded.');
+    lines.push('', '### Datasets activated', '');
+    lines.push(lineageSection.datasets?.length ? `${lineageSection.datasets.length} dataset event(s) recorded.` : 'No dataset events recorded.');
+    lines.push('', '### Retrieval context (RAG) / tool calls (agent)', '');
+    lines.push(`${lineageSection.retrievalContexts?.length || 0} retrieval-context observation(s), ${lineageSection.toolCalls?.length || 0} tool-call observation(s).`);
+  }
   return `${lines.join('\n')}\n`;
+}
+
+function buildLineageHtmlSection(lineageSection) {
+  if (!lineageSection?.configured) {
+    return '<p>Not configured: this deployment has no self-hosted Langfuse instance wired up. Lineage is an additive capability — its absence does not affect any other section of this report.</p>';
+  }
+  if (!lineageSection.available) {
+    return `<p>Unavailable: ${escapeHtml(lineageSection.reason || 'the self-hosted Langfuse instance was unreachable when this report was generated.')}</p>`;
+  }
+  const provenanceRows = (lineageSection.trainingProvenance || [])
+    .map(
+      (entry) => `
+      <tr>
+        <td>${escapeHtml(String(entry.attestationSource))}</td>
+        <td>${entry.unattested ? 'Yes' : 'No'}</td>
+        <td>${escapeHtml(String(entry.note || '')).slice(0, 200)}</td>
+      </tr>`,
+    )
+    .join('');
+  return `
+    <p>${lineageSection.summary?.totalTraces ?? 0} trace(s), ${lineageSection.summary?.totalObservations ?? 0} observation(s),
+    ${lineageSection.summary?.totalRuns ?? 0} run(s), ${lineageSection.summary?.totalInferenceCalls ?? 0} inference call(s) recorded.</p>
+    <h3>Training provenance</h3>
+    ${
+      provenanceRows
+        ? `<table><thead><tr><th>Attestation source</th><th>Unattested gap</th><th>Note</th></tr></thead><tbody>${provenanceRows}</tbody></table>`
+        : '<p>No training-provenance record found for this target.</p>'
+    }
+    <h3>Prompt versions / datasets / retrieval / tool calls</h3>
+    <p>${lineageSection.promptVersions?.length || 0} prompt version change(s), ${lineageSection.datasets?.length || 0} dataset event(s),
+    ${lineageSection.retrievalContexts?.length || 0} retrieval-context observation(s), ${lineageSection.toolCalls?.length || 0} tool-call observation(s).</p>
+  `;
 }
 
 function buildHtmlReport(report) {
@@ -1020,6 +1088,10 @@ function buildHtmlReport(report) {
     <section>
       <h2>Run History</h2>
       <table><thead><tr><th>Created</th><th>Stage</th><th>Status</th><th>Pass</th><th>Total</th></tr></thead><tbody>${historyRows}</tbody></table>
+    </section>
+    <section>
+      <h2>Lineage</h2>
+      ${buildLineageHtmlSection(report.lineage)}
     </section>
     <section>
       <h2>Engine Config</h2>
@@ -4094,7 +4166,7 @@ async function callCustomScriptProvider(args) {
   return normalizeProviderResult(result);
 }
 
-async function callProviderAdapter(adapter, args) {
+async function callProviderAdapterInner(adapter, args) {
   switch (adapter) {
     case 'openai-compatible':
       return callOpenAICompatible(args);
@@ -4122,6 +4194,79 @@ async function callProviderAdapter(adapter, args) {
       return callViaPromptfooLibrary(args);
     default:
       throw new Error(`Provider adapter "${adapter}" is cataloged but not executable yet`);
+  }
+}
+
+// Single seam covering every one of this product's 11 provider bridges (openai-compatible,
+// azure-openai, anthropic, cohere, gemini, http-json, graphql, websocket-chat, browser-chatbot,
+// cli-provider, custom-script, promptfoo-library) — every inference call this product performs,
+// including CyberSecEval judge calls, red-team generation, and eval runs, passes through here.
+// Emits a Langfuse GENERATION observation (lineage's ModelArtifact facet) iff the caller
+// established lineage context via lineage.runWithLineageContext (see executeStoredStageRun) —
+// additive and silent otherwise, and never alters callProviderAdapterInner's behavior or return
+// value even when it throws.
+async function callProviderAdapter(adapter, args) {
+  const ctx = lineage.getLineageContext();
+  if (!ctx) return callProviderAdapterInner(adapter, args);
+
+  const startedAt = lineage.nowIso();
+  let result;
+  let errorMessage;
+  try {
+    result = await callProviderAdapterInner(adapter, args);
+    return result;
+  } catch (error) {
+    errorMessage = error.message;
+    throw error;
+  } finally {
+    const generationId = lineage.emitObservation({
+      type: 'GENERATION',
+      traceId: ctx.traceId,
+      parentObservationId: ctx.parentObservationId,
+      name: `provider-call:${adapter}`,
+      startTime: startedAt,
+      endTime: lineage.nowIso(),
+      input: { systemPrompt: args.systemPrompt, prompt: args.prompt },
+      output: result ? result.output : undefined,
+      model: args.model,
+      usage: result ? lineage.toLangfuseUsage(result.tokenUsage) : undefined,
+      level: errorMessage ? 'ERROR' : 'DEFAULT',
+      statusMessage: errorMessage,
+      metadata: {
+        // ModelArtifact facet — see the AI-native lineage facets doc in EVIDENCE.md for how this
+        // is surfaced in the lineage graph/exports.
+        modelArtifact: {
+          modelName: args.model,
+          provider: args.providerKey || adapter,
+          adapter,
+          baseUrl: args.baseUrl,
+        },
+        targetId: ctx.targetId,
+      },
+    });
+    // Agent-target tool-call lineage — reuses this product's existing extractToolCalls()
+    // (already used by is-tool-call-style assertions to read tool_calls/function_call off a raw
+    // provider response), not a new extraction convention. Fires for any provider whose response
+    // actually contains tool calls, honestly reflecting agent/multi-agent targets that call
+    // tools versus plain-LLM targets that never will.
+    if (result?.rawResponse) {
+      try {
+        const toolCalls = extractToolCalls(result.output, { providerResponse: result });
+        for (const toolCall of toolCalls || []) {
+          const toolName = toolCall?.function?.name || toolCall?.name || 'unknown-tool';
+          lineage.emitObservation({
+            type: 'TOOL',
+            traceId: ctx.traceId,
+            parentObservationId: generationId,
+            name: `tool-call:${toolName}`,
+            input: toolCall?.function?.arguments ?? toolCall?.arguments ?? null,
+            metadata: { targetId: ctx.targetId, toolCallId: toolCall?.id || null },
+          });
+        }
+      } catch {
+        /* best-effort — extractToolCalls already tolerates non-JSON output internally */
+      }
+    }
   }
 }
 
@@ -4618,6 +4763,30 @@ async function executeEvalRun(target, runOptions = {}, execution = {}) {
         latencyMs = Date.now() - started;
         if (cacheEnabled) {
           await writeEvalCache(target.id, cacheKey, task.provider.label, task.prompt, result, latencyMs);
+        }
+      }
+      // RetrievalContext facet — only fires for rows that actually carry retrieved context
+      // (the same `vars.context` resolveRagContext() already reads for context-recall/
+      // -relevance/-faithfulness assertions, not a new convention), and only when this row is
+      // running inside an instrumented stage-run trace. RAG targets get this facet honestly;
+      // every other target type simply never has `vars.context` set, so this never fires for
+      // them — no flattening of target types into one shape.
+      {
+        const lineageCtx = lineage.getLineageContext();
+        const retrievedContext = task.vars?.context;
+        if (lineageCtx && retrievedContext) {
+          lineage.emitObservation({
+            type: 'RETRIEVER',
+            traceId: lineageCtx.traceId,
+            parentObservationId: lineageCtx.parentObservationId,
+            name: `retrieval-context: ${task.test?.description || 'test case'}`,
+            input: { query: task.prompt },
+            output: retrievedContext,
+            metadata: {
+              targetId: lineageCtx.targetId,
+              contextSource: task.test?.metadata?.contextSource || 'vars.context',
+            },
+          });
         }
       }
       const transformExpr = task.test?.options?.transform;
@@ -6392,7 +6561,38 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function runsToCsv(runs) {
+// Appended as a second table (blank-line separated, own header row) rather than mixed into the
+// primary table's columns — the lineage facts (training provenance, prompt versions, etc.) don't
+// share a schema with per-run or per-control rows, and a spreadsheet/GRC tool opening this file
+// still finds the primary table intact starting at row 1. This convention is honestly labeled
+// in each row (Not configured/Unavailable when the capability isn't wired up or reachable) —
+// never silently absent from a CSV export that otherwise claims to be complete evidence.
+function lineageCsvBlock(lineageSection) {
+  const rows = [[], ['Lineage']];
+  if (!lineageSection?.configured) {
+    rows.push(['Not configured', 'This deployment has no self-hosted Langfuse instance wired up.']);
+    return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+  }
+  if (!lineageSection.available) {
+    rows.push(['Unavailable', lineageSection.reason || 'The self-hosted Langfuse instance was unreachable when this export was generated.']);
+    return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+  }
+  rows.push(['Metric', 'Count']);
+  rows.push(['Traces', lineageSection.summary?.totalTraces ?? 0]);
+  rows.push(['Observations', lineageSection.summary?.totalObservations ?? 0]);
+  rows.push(['Runs', lineageSection.summary?.totalRuns ?? 0]);
+  rows.push(['Inference calls', lineageSection.summary?.totalInferenceCalls ?? 0]);
+  rows.push(['Retrieval-context observations', lineageSection.retrievalContexts?.length || 0]);
+  rows.push(['Tool-call observations', lineageSection.toolCalls?.length || 0]);
+  rows.push([]);
+  rows.push(['Attestation source', 'Unattested gap', 'Note']);
+  for (const entry of lineageSection.trainingProvenance || []) {
+    rows.push([String(entry.attestationSource), entry.unattested ? 'Yes' : 'No', String(entry.note || '').slice(0, 200)]);
+  }
+  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+}
+
+function runsToCsv(runs, lineageSection) {
   const header = [
     'run_id',
     'stage_key',
@@ -6441,7 +6641,8 @@ function runsToCsv(runs) {
       ]);
     }
   }
-  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+  const primary = rows.map((row) => row.map(csvCell).join(',')).join('\n');
+  return `${primary}\n${lineageCsvBlock(lineageSection)}`;
 }
 
 // Row shape ports promptfoo's own FrameworkCsvExporter.tsx exactly: Framework, Category,
@@ -6486,7 +6687,8 @@ function frameworkComplianceToCsv(report) {
       }
     }
   }
-  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
+  const primary = rows.map((row) => row.map(csvCell).join(',')).join('\n');
+  return `${primary}\n${lineageCsvBlock(report.lineage)}`;
 }
 
 function getReadiness(target) {
@@ -6589,7 +6791,14 @@ async function createStageRunRecord(targetId, stageKey, runOptions = {}) {
   return { runId, payload, configSnapshot };
 }
 
-async function executeStoredStageRun(runId, targetId, stageKey, runOptions, configSnapshot, payload = null) {
+// Establishes this run's lineage trace/span, then runs the real stage-execution logic inside
+// lineage.runWithLineageContext so every provider call made anywhere during it (however deeply
+// nested — executeEvalRun/executeRedTeamRun/executeModelAuditRun and everything they call)
+// automatically attaches to this trace as a GENERATION observation via the callProviderAdapter
+// seam, with zero changes to any of those intermediate functions. Single seam covering
+// eval/red-team/model-audit run start+end — CyberSecEval runs flow through the eval path and are
+// covered the same way, tagged via each row's existing cyberSecEval metadata.
+async function executeStoredStageRunInner(runId, targetId, stageKey, runOptions, configSnapshot, payload = null) {
   const targetPayload = payload || await fetchTarget(targetId);
   try {
     const results =
@@ -6637,6 +6846,85 @@ async function executeStoredStageRun(runId, targetId, stageKey, runOptions, conf
       [error.message, runId],
     );
     error.run = rowToRun(failed.rows[0]);
+    throw error;
+  }
+}
+
+function stageRunLineageName(stageKey, target) {
+  const label = stageKey === 'eval' ? 'Eval run' : stageKey === 'red_team' ? 'Red-team run' : 'Model-audit run';
+  return `${label}: ${target.displayName || target.id}`;
+}
+
+async function executeStoredStageRun(runId, targetId, stageKey, runOptions, configSnapshot, payload = null) {
+  if (!lineage.isLineageConfigured()) {
+    return executeStoredStageRunInner(runId, targetId, stageKey, runOptions, configSnapshot, payload);
+  }
+  const targetPayload = payload || await fetchTarget(targetId);
+  const target = targetPayload?.target;
+  // Recognizes both this instrumentation's own `triggeredBy` (set by processDueSchedules) and
+  // the pre-existing `trigger: 'manual-schedule'` field the run-now route already sent before
+  // lineage existed — additive, not a rename of an established convention.
+  const triggeredBySchedule = runOptions?.triggeredBy === 'schedule' || runOptions?.trigger === 'manual-schedule';
+  const traceId = lineage.emitTrace({
+    name: `${stageRunLineageName(stageKey, target || { id: targetId })}${triggeredBySchedule ? ` (schedule: ${runOptions.scheduleName || runOptions.scheduleId})` : ''}`,
+    sessionId: targetId,
+    input: runOptions,
+    metadata: {
+      targetId,
+      targetType: target?.targetType,
+      stageKey,
+      runId,
+      triggeredBy: triggeredBySchedule ? 'schedule' : 'manual',
+      scheduleId: triggeredBySchedule ? runOptions.scheduleId : undefined,
+    },
+    tags: ['stage-run', stageKey, target?.targetType, triggeredBySchedule ? 'schedule-triggered' : 'manual-triggered'].filter(Boolean),
+  });
+  const spanId = lineage.emitObservation({
+    type: 'SPAN',
+    traceId,
+    name: `${stageKey} run execution`,
+    input: runOptions,
+    metadata: { runId, stageKey },
+  });
+  try {
+    const outcome = await lineage.runWithLineageContext({ traceId, parentObservationId: spanId, targetId }, () =>
+      executeStoredStageRunInner(runId, targetId, stageKey, runOptions, configSnapshot, payload),
+    );
+    const summary = outcome?.run?.results?.summary;
+    lineage.updateObservation({
+      type: 'SPAN',
+      id: spanId,
+      traceId,
+      output: summary || outcome?.run?.status,
+      metadata: {
+        status: outcome?.run?.status,
+        // AssuranceEvidence facet — links this run's outcome to the framework controls it
+        // exercised. Full control attribution lives in the run's own results (categoryStats via
+        // frameworks.cjs); this is the lineage-graph-queryable summary of it.
+        assuranceEvidence: summary
+          ? { pass: summary.pass, fail: summary.fail, error: summary.error, total: summary.total }
+          : undefined,
+      },
+    });
+    if (summary && Number.isFinite(summary.passRate)) {
+      lineage.emitScore({
+        traceId,
+        observationId: spanId,
+        name: 'pass-rate',
+        value: summary.passRate,
+        dataType: 'NUMERIC',
+        comment: `${summary.pass}/${summary.total} passed (${stageKey})`,
+      });
+    }
+    return outcome;
+  } catch (error) {
+    lineage.updateObservation({
+      type: 'SPAN',
+      id: spanId,
+      traceId,
+      level: 'ERROR',
+      statusMessage: error.message,
+    });
     throw error;
   }
 }
@@ -6713,7 +7001,15 @@ async function processDueSchedules() {
     let hadFailure = false;
     try {
       for (const stageKey of schedule.stageKeys) {
-        const { run } = await executeAndStoreStageRun(schedule.targetId, stageKey, schedule.runOptions || {});
+        // Threaded into runOptions (stored verbatim as the run's own run_options, and read back
+        // by executeStoredStageRun's lineage trace below) — no new plumbing, since runOptions
+        // already flows unmodified from here through createStageRunRecord to the trace builder.
+        const { run } = await executeAndStoreStageRun(schedule.targetId, stageKey, {
+          ...(schedule.runOptions || {}),
+          triggeredBy: 'schedule',
+          scheduleId: schedule.id,
+          scheduleName: schedule.name,
+        });
         const summary = run.results?.summary || summarizeRows(run.results?.rows || []);
         if (run.status !== 'completed' || summary.fail > 0 || summary.error > 0) {
           hadFailure = true;
@@ -7066,6 +7362,23 @@ app.patch('/api/targets/:id/stages/eval/config', requireAuth, requireAdmin, asyn
      where target_id = $2 and stage_key = 'eval'`,
     [updated.promptfooConfig, req.params.id],
   );
+  const promptTemplateChanged =
+    req.body?.promptTemplate !== undefined && req.body.promptTemplate !== (target.metadata || {}).eval?.promptTemplate;
+  if (promptTemplateChanged) {
+    // PromptVersion facet — the eval stage's promptTemplate is what buildEvalTests/buildPromptfooConfig
+    // actually renders every test case through, so this is the prompt version every later eval/
+    // CyberSecEval run against this target references (see the stage-run trace's `input`).
+    lineage.emitTrace({
+      name: `Prompt template updated: ${updated.target.displayName}`,
+      sessionId: req.params.id,
+      input: { promptTemplate: req.body.promptTemplate },
+      metadata: {
+        targetId: req.params.id,
+        promptVersion: { promptTemplate: req.body.promptTemplate, changedAt: lineage.nowIso() },
+      },
+      tags: ['prompt-version', 'eval-prompt-template-update'],
+    });
+  }
   res.json(updated);
 });
 
@@ -7763,11 +8076,30 @@ app.get('/api/targets/:id/export/:format', requireAuth, async (req, res) => {
   }
   const format = req.params.format;
   const safeName = payload.target.displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'target';
+  // Recorded once up front (not per-branch below) — the export content itself isn't the input/
+  // output here, just the fact that an evidence pack in this format was pulled, by whom, when.
+  lineage.emitTrace({
+    name: `Evidence exported: ${payload.target.displayName} (${format})`,
+    sessionId: req.params.id,
+    input: { format },
+    metadata: { targetId: req.params.id, format },
+    tags: ['evidence-export', format],
+  });
   if (format === 'yaml') {
     const portable = await buildPortableExportConfig(payload.target);
+    // Lineage surfaces as a YAML comment header, not a top-level config key — this file is a
+    // real, loadable promptfoo config (see toYaml's own comments on schema-compliance), and an
+    // unrecognized top-level key would break that. Comments are always safe/ignored by any YAML
+    // parser, matching how the rest of this deployment never trades correctness for completeness.
+    const lineageSection = lineage.isLineageConfigured() ? await buildLineageGraph(payload.target) : { configured: false };
+    const lineageComment = !lineageSection.configured
+      ? '# Lineage: not configured — this deployment has no self-hosted Langfuse instance wired up.'
+      : !lineageSection.available
+        ? `# Lineage: unavailable — ${lineageSection.reason || 'Langfuse unreachable'}`
+        : `# Lineage: ${lineageSection.summary?.totalTraces ?? 0} trace(s), ${lineageSection.summary?.totalObservations ?? 0} observation(s), ${lineageSection.summary?.totalRuns ?? 0} run(s), ${lineageSection.summary?.totalInferenceCalls ?? 0} inference call(s). Full graph: GET /api/targets/${payload.target.id}/lineage`;
     res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}-engine-config.yaml"`);
-    return res.send(toYaml(portable));
+    return res.send(`${lineageComment}\n${toYaml(portable)}`);
   }
   if (format === 'csv') {
     const runs = await pool.query(
@@ -7777,9 +8109,10 @@ app.get('/api/targets/:id/export/:format', requireAuth, async (req, res) => {
        limit 100`,
       [req.params.id],
     );
+    const lineageSection = lineage.isLineageConfigured() ? await buildLineageGraph(payload.target) : { configured: false };
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}-runs.csv"`);
-    return res.send(runsToCsv(runs.rows.map(rowToRun)));
+    return res.send(runsToCsv(runs.rows.map(rowToRun), lineageSection));
   }
   if (format === 'markdown' || format === 'md') {
     const report = await buildTargetReportPayload(req.params.id);
@@ -7826,6 +8159,13 @@ app.get('/api/targets/:id/export', requireAuth, async (req, res) => {
     schedules: schedules.rows.map(rowToSchedule),
     runs: runs.rows.map(rowToRun),
     exportedAt: new Date().toISOString(),
+  });
+  lineage.emitTrace({
+    name: `Evidence exported: ${payload.target.displayName} (portable-config)`,
+    sessionId: req.params.id,
+    input: { format: 'portable-config' },
+    metadata: { targetId: req.params.id, format: 'portable-config' },
+    tags: ['evidence-export', 'portable-config'],
   });
 });
 
@@ -8254,6 +8594,13 @@ app.post('/api/targets/:id/datasets', requireAuth, requireAdmin, async (req, res
       ]);
     }
     await client.query('commit');
+    lineage.emitTrace({
+      name: `Dataset saved: ${name} v${version}${active ? ' (activated)' : ''}`,
+      sessionId: req.params.id,
+      input: { name, version, rowCount: rows.length, active, source: body.source || 'ui' },
+      metadata: { targetId: req.params.id, datasetId: inserted.rows[0].id },
+      tags: ['dataset', active ? 'dataset-activated' : 'dataset-saved'],
+    });
     res.status(201).json({ dataset: rowToDataset(inserted.rows[0]), detail: await fetchTarget(req.params.id) });
   } catch (error) {
     await client.query('rollback');
@@ -8294,6 +8641,13 @@ app.post('/api/targets/:id/datasets/:datasetId/activate', requireAuth, requireAd
       req.params.id,
     ]);
     await client.query('commit');
+    lineage.emitTrace({
+      name: `Dataset activated: ${dataset.name} v${dataset.version}`,
+      sessionId: req.params.id,
+      input: { datasetId: dataset.id, name: dataset.name, version: dataset.version },
+      metadata: { targetId: req.params.id, datasetId: dataset.id },
+      tags: ['dataset', 'dataset-activated'],
+    });
     res.json({ dataset: rowToDataset({ ...dataset, active: true }), detail: await fetchTarget(req.params.id) });
   } catch (error) {
     await client.query('rollback');
@@ -8323,6 +8677,143 @@ app.get('/api/targets/:id/report', requireAuth, async (req, res) => {
     return res.status(404).json({ error: 'Target not found' });
   }
   res.json(report);
+});
+
+const LINEAGE_OBSERVATION_TAGS = { SPAN: 'run', GENERATION: 'inference', RETRIEVER: 'retrieval', AGENT: 'agent', TOOL: 'tool-call' };
+
+// Resolves this target's full lineage — backward (provenance: model/training, prompt versions,
+// datasets) and forward (evidence: red-team/eval/model-audit/CyberSecEval runs, inference calls,
+// retrieval context, tool calls) — by querying the forked, self-hosted Langfuse deployment via
+// its own API (never Langfuse's UI, never langfuse.com). Not a new stage: this is read-only
+// query/aggregation over what the instrumentation throughout this file already emitted, exactly
+// like buildTargetReportPayload is a read-only view over existing stage-run data.
+async function buildLineageGraph(target) {
+  if (!lineage.isLineageConfigured()) {
+    return { configured: false, reason: 'Langfuse is not configured for this deployment (LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY unset) — lineage was never recorded, not silently incomplete.' };
+  }
+  const sessionResult = await lineage.fetchSessionTraces(target.id);
+  if (!sessionResult.ok) {
+    return { configured: true, available: false, reason: `Langfuse unreachable: ${sessionResult.reason}` };
+  }
+  const traceHeaders = sessionResult.traces;
+  const traceDetails = await Promise.all(traceHeaders.map((trace) => lineage.fetchTraceDetail(trace.id)));
+
+  const nodes = [
+    { id: `target:${target.id}`, type: 'target', label: target.displayName, data: { targetType: target.targetType, modelName: target.modelName, endpointUrl: target.endpointUrl } },
+  ];
+  const edges = [];
+  const trainingProvenance = [];
+  const promptVersions = [];
+  const datasetEvents = [];
+  const runs = [];
+  const inferenceCalls = [];
+  const retrievalContexts = [];
+  const toolCalls = [];
+  const exports = [];
+
+  for (const detail of traceDetails) {
+    if (!detail) continue;
+    const traceNodeId = `trace:${detail.id}`;
+    nodes.push({
+      id: traceNodeId,
+      type: 'trace',
+      label: detail.name || detail.id,
+      data: { timestamp: detail.timestamp, tags: detail.tags || [], metadata: detail.metadata || {} },
+    });
+    edges.push({ from: `target:${target.id}`, to: traceNodeId, kind: 'target-history' });
+
+    const meta = detail.metadata || {};
+    if (meta.trainingProvenance) trainingProvenance.push({ traceId: detail.id, timestamp: detail.timestamp, ...meta.trainingProvenance });
+    if (meta.promptVersion) promptVersions.push({ traceId: detail.id, timestamp: detail.timestamp, ...meta.promptVersion });
+    if ((detail.tags || []).includes('dataset')) datasetEvents.push({ traceId: detail.id, timestamp: detail.timestamp, name: detail.name, input: detail.input });
+    if ((detail.tags || []).includes('evidence-export')) exports.push({ traceId: detail.id, timestamp: detail.timestamp, name: detail.name, format: meta.format });
+    if ((detail.tags || []).includes('stage-run')) {
+      runs.push({
+        traceId: detail.id,
+        timestamp: detail.timestamp,
+        stageKey: meta.stageKey,
+        triggeredBy: meta.triggeredBy,
+        assuranceEvidence: meta.assuranceEvidence,
+        output: detail.output,
+      });
+    }
+
+    for (const obs of detail.observations || []) {
+      const obsNodeId = `obs:${obs.id}`;
+      nodes.push({
+        id: obsNodeId,
+        type: obs.type,
+        label: obs.name || obs.type,
+        data: {
+          startTime: obs.startTime,
+          endTime: obs.endTime,
+          model: obs.model,
+          usage: obs.usageDetails,
+          level: obs.level,
+          statusMessage: obs.statusMessage,
+          metadata: obs.metadata || {},
+        },
+      });
+      edges.push({
+        from: obs.parentObservationId ? `obs:${obs.parentObservationId}` : traceNodeId,
+        to: obsNodeId,
+        kind: LINEAGE_OBSERVATION_TAGS[obs.type] || 'observation',
+      });
+      const obsMeta = obs.metadata || {};
+      if (obs.type === 'GENERATION') {
+        inferenceCalls.push({
+          traceId: detail.id,
+          observationId: obs.id,
+          startTime: obs.startTime,
+          model: obs.model,
+          modelArtifact: obsMeta.modelArtifact,
+          input: obs.input,
+          output: obs.output,
+          usage: obs.usageDetails,
+          level: obs.level,
+        });
+      } else if (obs.type === 'RETRIEVER') {
+        retrievalContexts.push({ traceId: detail.id, observationId: obs.id, input: obs.input, output: obs.output, metadata: obsMeta });
+      } else if (obs.type === 'TOOL' || obs.type === 'AGENT') {
+        toolCalls.push({ traceId: detail.id, observationId: obs.id, name: obs.name, input: obs.input, metadata: obsMeta });
+      }
+    }
+  }
+
+  return {
+    configured: true,
+    available: true,
+    targetId: target.id,
+    summary: {
+      totalTraces: traceDetails.filter(Boolean).length,
+      totalObservations: nodes.filter((n) => n.type !== 'target' && n.type !== 'trace').length,
+      totalRuns: runs.length,
+      totalInferenceCalls: inferenceCalls.length,
+    },
+    graph: { nodes, edges },
+    // Backward chain — upstream provenance.
+    trainingProvenance,
+    promptVersions,
+    datasets: datasetEvents,
+    // Forward chain — downstream evidence.
+    runs,
+    inferenceCalls,
+    retrievalContexts,
+    toolCalls,
+    exports,
+  };
+}
+
+// Not a new stage — a read-only cross-cutting view over the target, same relationship
+// buildTargetReportPayload's /report already has to the existing stage runs. No new
+// /api/targets/:id/stages/lineage/* route family, no new stage runner, no new run type.
+app.get('/api/targets/:id/lineage', requireAuth, async (req, res) => {
+  const payload = await fetchTarget(req.params.id);
+  if (!payload) {
+    return res.status(404).json({ error: 'Target not found' });
+  }
+  const result = await buildLineageGraph(payload.target);
+  res.json(result);
 });
 
 app.post('/api/targets', requireAuth, requireAdmin, async (req, res) => {
@@ -8431,19 +8922,34 @@ app.post('/api/targets', requireAuth, requireAdmin, async (req, res) => {
       planRows.push(result.rows[0]);
     }
     await client.query('commit');
-    res.status(201).json({
-      target: rowToTarget(
-        inserted.rows[0],
-        planRows.map((row) => ({
-          id: row.id,
-          stageOrder: row.stage_order,
-          stageKey: row.stage_key,
-          stageLabel: row.stage_label,
-          status: row.status,
-          config: row.config,
-        })),
-      ),
+    const finalTarget = rowToTarget(
+      inserted.rows[0],
+      planRows.map((row) => ({
+        id: row.id,
+        stageOrder: row.stage_order,
+        stageKey: row.stage_key,
+        stageLabel: row.stage_label,
+        status: row.status,
+        config: row.config,
+      })),
+    );
+    // Lineage: one trace per target, established at onboarding — see lineage.cjs's data-model
+    // comment for why sessionId (not a custom foreign key) is what ties every later trace for
+    // this target together. TrainingProvenance is captured here, once, at creation time (not
+    // re-derived on every later query) since it's a property of the model choice, not the run.
+    const providerKey = finalTarget.metadata?.provider?.kind;
+    lineage.emitTrace({
+      name: `Target onboarded: ${finalTarget.displayName}`,
+      sessionId: finalTarget.id,
+      input: { targetType, modelName, endpointUrl, providerKey },
+      metadata: {
+        targetId: finalTarget.id,
+        targetType: finalTarget.targetType,
+        trainingProvenance: lineage.buildTrainingProvenance(providerKey, finalTarget.metadata?.trainingProvenance),
+      },
+      tags: ['target-lifecycle', 'onboarding', finalTarget.targetType].filter(Boolean),
     });
+    res.status(201).json({ target: finalTarget });
   } catch (error) {
     await client.query('rollback');
     res.status(500).json({ error: error.message });
@@ -8596,6 +9102,23 @@ app.patch('/api/targets/:id', requireAuth, requireAdmin, async (req, res) => {
         req.params.id,
       ],
     );
+    const providerChanged = Boolean(safeSubmitted.provider) || Boolean(safeSubmitted.judge);
+    const promptChanged = systemPrompt !== undefined && systemPrompt !== payload.target.systemPrompt;
+    lineage.emitTrace({
+      name: `Target updated: ${updated.target.displayName}${providerChanged ? ' (provider config)' : ''}${promptChanged ? ' (system prompt)' : ''}`,
+      sessionId: req.params.id,
+      input: { providerChanged, promptChanged, statusChanged: status !== undefined && status !== payload.target.status },
+      metadata: {
+        targetId: req.params.id,
+        targetType: updated.target.targetType,
+        // PromptVersion facet — the target's system prompt is the closest thing to a top-level
+        // "prompt version" outside the eval stage's own promptTemplate (see the eval config PATCH
+        // route below for that one). Recorded verbatim so lineage can show exactly which prompt
+        // text was live at the time of every later run.
+        ...(promptChanged ? { promptVersion: { systemPrompt, changedAt: lineage.nowIso() } } : {}),
+      },
+      tags: ['target-lifecycle', providerChanged ? 'provider-config-update' : 'target-update', updated.target.targetType].filter(Boolean),
+    });
     res.json(updated);
   } catch (error) {
     await client.query('rollback');

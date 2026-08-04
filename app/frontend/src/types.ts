@@ -340,6 +340,41 @@ export interface TargetReport {
   engineConfigYaml: string;
 }
 
+export interface LineageGraphNode {
+  id: string;
+  type: string;
+  label: string;
+  data: Record<string, unknown>;
+}
+
+export interface LineageGraphEdge {
+  from: string;
+  to: string;
+  kind: string;
+}
+
+export interface TargetLineage {
+  configured: boolean;
+  available?: boolean;
+  reason?: string;
+  targetId?: string;
+  summary?: {
+    totalTraces: number;
+    totalObservations: number;
+    totalRuns: number;
+    totalInferenceCalls: number;
+  };
+  graph?: { nodes: LineageGraphNode[]; edges: LineageGraphEdge[] };
+  trainingProvenance?: Array<Record<string, unknown>>;
+  promptVersions?: Array<Record<string, unknown>>;
+  datasets?: Array<Record<string, unknown>>;
+  runs?: Array<Record<string, unknown>>;
+  inferenceCalls?: Array<Record<string, unknown>>;
+  retrievalContexts?: Array<Record<string, unknown>>;
+  toolCalls?: Array<Record<string, unknown>>;
+  exports?: Array<Record<string, unknown>>;
+}
+
 export interface RunComparison {
   left: StageRun;
   right: StageRun;

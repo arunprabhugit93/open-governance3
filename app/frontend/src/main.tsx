@@ -1,5 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ReactFlow, Background, Controls, MiniMap, type Node as FlowNode, type Edge as FlowEdge } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import {
   createTarget,
   activateDataset,
@@ -20,6 +22,7 @@ import {
   exportTarget,
   compareRuns,
   getTargetReport,
+  getTargetLineage,
   getRunDetail,
   importEvalStageConfig,
   generateEvalDataset,
@@ -78,6 +81,8 @@ import type {
   SupportedTargetType,
   TargetDataset,
   TargetDetailResponse,
+  TargetLineage,
+  LineageGraphNode,
   TargetReport,
   TargetSchedule,
   TargetTypeKey,
@@ -88,10 +93,10 @@ import './styles.css';
 
 type View = 'registry' | 'onboard' | 'detail' | 'users' | 'tokens';
 type ExecutableStageKey = 'eval' | 'red_team' | 'model_audit';
-type StageKey = ExecutableStageKey | 'evidence';
+type StageKey = ExecutableStageKey | 'evidence' | 'lineage';
 type KeyValueRow = { id: string; name: string; value: string };
 
-const STAGE_KEYS: StageKey[] = ['eval', 'red_team', 'model_audit', 'evidence'];
+const STAGE_KEYS: StageKey[] = ['eval', 'red_team', 'model_audit', 'evidence', 'lineage'];
 
 type Route = { view: View; targetId?: string; stage?: StageKey };
 
@@ -3593,6 +3598,309 @@ function ModelAuditWorkspace({
   );
 }
 
+// Simple layered layout (BFS depth from the target root node) — deliberately not pulling in a
+// dagre-style auto-layout dependency for a graph this shallow (target -> traces -> observations,
+// rarely more than 3-4 levels deep). Keeps this feature's only new dependency to @xyflow/react
+// itself (npm-installed, bundled by Vite at build time — no runtime CDN load, consistent with
+// this deployment's zero-external-hosted-call posture).
+function layoutLineageGraph(nodes: LineageGraphNode[], edges: { from: string; to: string; kind: string }[]): { flowNodes: FlowNode[]; flowEdges: FlowEdge[] } {
+  const childrenByParent = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!childrenByParent.has(edge.from)) childrenByParent.set(edge.from, []);
+    childrenByParent.get(edge.from)!.push(edge.to);
+  }
+  const depthById = new Map<string, number>();
+  const rootId = nodes.find((n) => n.type === 'target')?.id;
+  if (rootId) {
+    const queue: Array<[string, number]> = [[rootId, 0]];
+    while (queue.length) {
+      const [id, depth] = queue.shift()!;
+      if (depthById.has(id)) continue;
+      depthById.set(id, depth);
+      for (const childId of childrenByParent.get(id) || []) queue.push([childId, depth + 1]);
+    }
+  }
+  const countByDepth = new Map<number, number>();
+  const NODE_TYPE_COLOR: Record<string, string> = {
+    target: '#1d4ed8',
+    trace: '#334155',
+    SPAN: '#7c3aed',
+    GENERATION: '#0f766e',
+    RETRIEVER: '#b45309',
+    AGENT: '#be185d',
+    TOOL: '#4d7c0f',
+  };
+  const flowNodes: FlowNode[] = nodes.map((node) => {
+    const depth = depthById.get(node.id) ?? 0;
+    const yIndex = countByDepth.get(depth) || 0;
+    countByDepth.set(depth, yIndex + 1);
+    return {
+      id: node.id,
+      position: { x: depth * 260, y: yIndex * 90 },
+      data: { label: `${node.label}` },
+      style: {
+        background: NODE_TYPE_COLOR[node.type] || '#475569',
+        color: '#fff',
+        borderRadius: 8,
+        padding: 8,
+        fontSize: 12,
+        width: 220,
+      },
+    };
+  });
+  const flowEdges: FlowEdge[] = edges.map((edge, index) => ({
+    id: `e${index}-${edge.from}-${edge.to}`,
+    source: edge.from,
+    target: edge.to,
+    label: edge.kind,
+    style: { stroke: '#94a3b8' },
+  }));
+  return { flowNodes, flowEdges };
+}
+
+function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; token: string }) {
+  const [lineage, setLineage] = useState<TargetLineage | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'graph' | 'provenance' | 'inference' | 'evidence'>('graph');
+  const [selectedNode, setSelectedNode] = useState<LineageGraphNode | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError('');
+    getTargetLineage(token, detail.target.id)
+      .then(setLineage)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Unable to load lineage'))
+      .finally(() => setLoading(false));
+  }, [detail.target.id, token]);
+
+  if (loading) {
+    return <div className="empty">Loading lineage...</div>;
+  }
+  if (error) {
+    return <div className="error">{error}</div>;
+  }
+  if (!lineage?.configured) {
+    return (
+      <div className="panel">
+        <p className="eyebrow">Lineage</p>
+        <h2>Lineage capability not configured</h2>
+        <p className="muted">
+          {lineage?.reason ||
+            'This deployment has not configured a self-hosted Langfuse instance (LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY). Lineage is an additive capability — every other workflow works normally without it.'}
+        </p>
+      </div>
+    );
+  }
+  if (!lineage.available) {
+    return (
+      <div className="panel">
+        <p className="eyebrow">Lineage</p>
+        <h2>Lineage temporarily unavailable</h2>
+        <p className="muted">{lineage.reason || 'The self-hosted Langfuse instance is unreachable right now.'}</p>
+      </div>
+    );
+  }
+
+  const { flowNodes, flowEdges } = layoutLineageGraph(lineage.graph?.nodes || [], lineage.graph?.edges || []);
+
+  return (
+    <div className="detail-layout">
+      <section className="panel">
+        <p className="eyebrow">Lineage</p>
+        <h2>AI supply-chain lineage</h2>
+        <p className="muted">
+          Backward (model provenance, prompt versions, datasets) and forward (runs, inference calls, retrieval, tool
+          calls) lineage for this target — stored in a forked, self-hosted Langfuse instance, queried through this
+          product's own API. Nothing here links out to Langfuse's own UI.
+        </p>
+        <div className="registry-summary">
+          <div>
+            <p className="row-label">Traces</p>
+            <strong>{lineage.summary?.totalTraces ?? 0}</strong>
+          </div>
+          <div>
+            <p className="row-label">Observations</p>
+            <strong>{lineage.summary?.totalObservations ?? 0}</strong>
+          </div>
+          <div>
+            <p className="row-label">Runs</p>
+            <strong>{lineage.summary?.totalRuns ?? 0}</strong>
+          </div>
+          <div>
+            <p className="row-label">Inference calls</p>
+            <strong>{lineage.summary?.totalInferenceCalls ?? 0}</strong>
+          </div>
+        </div>
+        <div className="tab-row">
+          {(['graph', 'provenance', 'inference', 'evidence'] as const).map((tab) => (
+            <button
+              key={tab}
+              className={`tab-button${activeTab === tab ? ' active' : ''}`}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+            >
+              {tab === 'graph' ? 'Graph' : tab === 'provenance' ? 'Provenance (backward)' : tab === 'inference' ? 'Inference calls' : 'Evidence (forward)'}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'graph' ? (
+          <div style={{ display: 'flex', gap: 16 }}>
+            <div style={{ height: 520, flex: 1, border: '1px solid #334155', borderRadius: 8 }}>
+              <ReactFlow
+                nodes={flowNodes}
+                edges={flowEdges}
+                onNodeClick={(_event, node) => {
+                  const found = (lineage.graph?.nodes || []).find((n) => n.id === node.id) || null;
+                  setSelectedNode(found);
+                }}
+                fitView
+              >
+                <Background />
+                <Controls />
+                <MiniMap />
+              </ReactFlow>
+            </div>
+            {selectedNode ? (
+              <div className="panel" style={{ width: 320 }}>
+                <p className="eyebrow">{selectedNode.type}</p>
+                <h3>{selectedNode.label}</h3>
+                <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 440, overflow: 'auto' }}>
+                  {JSON.stringify(selectedNode.data, null, 2)}
+                </pre>
+              </div>
+            ) : (
+              <div className="panel muted" style={{ width: 320 }}>
+                Click a node to inspect its full facet data (ModelArtifact, TrainingProvenance, PromptVersion,
+                RetrievalContext, or AssuranceEvidence — whichever applies to that node).
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === 'provenance' ? (
+          <div className="detail-layout">
+            <section>
+              <h3>Training provenance</h3>
+              {!lineage.trainingProvenance?.length ? (
+                <p className="muted">No training-provenance record found for this target.</p>
+              ) : (
+                lineage.trainingProvenance.map((entry, i) => (
+                  <div className="finding-row" key={i}>
+                    <p>
+                      <strong>Attestation source:</strong> {String(entry.attestationSource)}{' '}
+                      {entry.unattested ? <span className="badge">unattested gap</span> : null}
+                    </p>
+                    {entry.cardUrl ? <p className="muted">Card: {String(entry.cardUrl)}</p> : null}
+                    <p className="muted">{String(entry.note || '')}</p>
+                  </div>
+                ))
+              )}
+            </section>
+            <section>
+              <h3>Prompt versions</h3>
+              {!lineage.promptVersions?.length ? (
+                <p className="muted">No prompt-version changes recorded.</p>
+              ) : (
+                lineage.promptVersions.map((entry, i) => (
+                  <div className="finding-row" key={i}>
+                    <p className="muted">{String(entry.timestamp)}</p>
+                    <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{String(entry.promptTemplate ?? entry.systemPrompt ?? '')}</pre>
+                  </div>
+                ))
+              )}
+            </section>
+            <section>
+              <h3>Datasets activated</h3>
+              {!lineage.datasets?.length ? (
+                <p className="muted">No dataset events recorded.</p>
+              ) : (
+                lineage.datasets.map((entry, i) => (
+                  <div className="finding-row" key={i}>
+                    <strong>{String(entry.name)}</strong>
+                    <p className="muted">{String(entry.timestamp)}</p>
+                  </div>
+                ))
+              )}
+            </section>
+          </div>
+        ) : null}
+
+        {activeTab === 'inference' ? (
+          <div>
+            {!lineage.inferenceCalls?.length ? (
+              <p className="muted">No inference calls recorded yet for this target.</p>
+            ) : (
+              lineage.inferenceCalls.map((call, i) => (
+                <div className="finding-row" key={i}>
+                  <p>
+                    <strong>{String(call.model || 'unknown model')}</strong> · {String(call.startTime)}
+                  </p>
+                  <p className="muted">Input: {JSON.stringify(call.input).slice(0, 200)}</p>
+                  <p className="muted">Output: {String(call.output ?? '').slice(0, 200)}</p>
+                </div>
+              ))
+            )}
+            <h3>Retrieval contexts (RAG)</h3>
+            {!lineage.retrievalContexts?.length ? (
+              <p className="muted">No retrieval-context observations recorded (either not a RAG target, or no test rows carried retrieved context).</p>
+            ) : (
+              lineage.retrievalContexts.map((entry, i) => (
+                <div className="finding-row" key={i}>
+                  <p className="muted">Output: {JSON.stringify(entry.output).slice(0, 300)}</p>
+                </div>
+              ))
+            )}
+            <h3>Tool calls (agent)</h3>
+            {!lineage.toolCalls?.length ? (
+              <p className="muted">No tool-call observations recorded (either not an agent target, or no tool calls were made).</p>
+            ) : (
+              lineage.toolCalls.map((entry, i) => (
+                <div className="finding-row" key={i}>
+                  <strong>{String(entry.name)}</strong>
+                  <p className="muted">{JSON.stringify(entry.input).slice(0, 200)}</p>
+                </div>
+              ))
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === 'evidence' ? (
+          <div>
+            <h3>Runs (red-team / eval / model-audit / CyberSecEval)</h3>
+            {!lineage.runs?.length ? (
+              <p className="muted">No stage runs recorded yet.</p>
+            ) : (
+              lineage.runs.map((run, i) => (
+                <div className="finding-row" key={i}>
+                  <p>
+                    <strong>{String(run.stageKey)}</strong> · {String(run.timestamp)} · triggered by {String(run.triggeredBy || 'manual')}
+                  </p>
+                  {run.assuranceEvidence ? (
+                    <p className="muted">{JSON.stringify(run.assuranceEvidence)}</p>
+                  ) : null}
+                </div>
+              ))
+            )}
+            <h3>Evidence exports</h3>
+            {!lineage.exports?.length ? (
+              <p className="muted">No evidence exports recorded yet.</p>
+            ) : (
+              lineage.exports.map((entry, i) => (
+                <div className="finding-row" key={i}>
+                  <strong>{String(entry.format || entry.name)}</strong>
+                  <p className="muted">{String(entry.timestamp)}</p>
+                </div>
+              ))
+            )}
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 function EvidenceWorkspace({
   detail,
   token,
@@ -4543,7 +4851,7 @@ function TargetDetailPage({
   }, [detail.target.id, detail.target.updatedAt]);
 
   useEffect(() => {
-    if (activeStage === 'evidence') return;
+    if (activeStage === 'evidence' || activeStage === 'lineage') return;
     const loader =
       activeStage === 'eval'
         ? listEvalRuns(token, detail.target.id)
@@ -4553,7 +4861,7 @@ function TargetDetailPage({
       .catch(() => setStageRuns((current) => ({ ...current, [activeStage]: [] })));
   }, [activeStage, detail.target.id, token]);
 
-  async function refreshRuns(stageKey: ExecutableStageKey = activeStage === 'evidence' ? 'eval' : activeStage, updated = detail) {
+  async function refreshRuns(stageKey: ExecutableStageKey = activeStage === 'evidence' || activeStage === 'lineage' ? 'eval' : activeStage, updated = detail) {
     const payload =
       stageKey === 'eval'
         ? await listEvalRuns(token, updated.target.id)
@@ -5111,6 +5419,23 @@ function TargetDetailPage({
             </button>
           </div>
         </article>
+        <article className="stage-card">
+          <div className="stage-head">
+            <div>
+              <h2>Lineage</h2>
+              <p className="muted">
+                AI supply-chain lineage: model provenance, prompt versions, datasets, and every run/inference call.
+              </p>
+            </div>
+            <span className="badge">lineage</span>
+          </div>
+          <p className="ready-text">Available</p>
+          <div className="stage-actions">
+            <button className="secondary-button" type="button" onClick={() => goToStage('lineage')}>
+              Open workspace
+            </button>
+          </div>
+        </article>
       </div>
       <section className="panel">
         <p className="eyebrow">Workspace</p>
@@ -5121,7 +5446,9 @@ function TargetDetailPage({
               ? 'Red team workspace'
               : activeStage === 'model_audit'
                 ? 'Model audit workspace'
-                : 'Evidence workspace'}
+                : activeStage === 'lineage'
+                  ? 'Lineage workspace'
+                  : 'Evidence workspace'}
         </h2>
         <StageWorkspace
           detail={detail}
@@ -5130,10 +5457,10 @@ function TargetDetailPage({
           providerGroups={providerGroups}
           workflowCatalog={workflowCatalog}
           isViewer={isViewer}
-          runs={activeStage === 'evidence' ? [] : stageRuns[activeStage]}
+          runs={activeStage === 'evidence' || activeStage === 'lineage' ? [] : stageRuns[activeStage]}
           onRefresh={async (updated) => {
             onRefresh(updated);
-            if (activeStage !== 'evidence') {
+            if (activeStage !== 'evidence' && activeStage !== 'lineage') {
               await refreshRuns(activeStage, updated);
             }
           }}
@@ -5164,6 +5491,10 @@ function StageWorkspace({
 }) {
   if (activeStage === 'evidence') {
     return <EvidenceWorkspace detail={detail} token={token} isViewer={isViewer} onRefresh={onRefresh} />;
+  }
+
+  if (activeStage === 'lineage') {
+    return <LineageWorkspace detail={detail} token={token} />;
   }
 
   if (activeStage === 'eval') {

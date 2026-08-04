@@ -1,0 +1,7 @@
+.github/workflows/*.lock.yml linguist-generated=true merge=ours
+
+# FORK PATCH (open-governance3): a Windows git checkout converted every shell script's line
+# endings to CRLF, breaking each one's shebang inside the Docker build (`./worker/entrypoint.sh:
+# No such file or directory` — /bin/sh\r doesn't exist) — found and fixed the hard way, live,
+# while first booting this deployment. See ../PROVENANCE.md.
+*.sh text eol=lf
