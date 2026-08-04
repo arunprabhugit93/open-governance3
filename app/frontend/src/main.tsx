@@ -50,6 +50,10 @@ import {
   listApiTokens,
   createApiToken,
   deleteApiToken,
+  listCyberSecEvalBenchmarks,
+  importCyberSecEvalBenchmark,
+  type CyberSecEvalBenchmark,
+  type CyberSecEvalUnavailableBenchmark,
   type EvalAssertion,
   type EvalStageConfigPayload,
   type ModelAuditStageConfigPayload,
@@ -1085,6 +1089,15 @@ function EvalWorkspace({
   const [configImporting, setConfigImporting] = useState(false);
   const [datasets, setDatasets] = useState<TargetDataset[]>([]);
   const [datasetName, setDatasetName] = useState('Eval dataset');
+  const [cyberSecEvalCatalog, setCyberSecEvalCatalog] = useState<{
+    sourceLabel: string;
+    sourceRepo: string;
+    sourceCommit: string;
+    available: CyberSecEvalBenchmark[];
+    unavailable: CyberSecEvalUnavailableBenchmark[];
+  } | null>(null);
+  const [cyberSecEvalImporting, setCyberSecEvalImporting] = useState('');
+  const [cyberSecEvalError, setCyberSecEvalError] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [running, setRunning] = useState(false);
@@ -1148,8 +1161,39 @@ function EvalWorkspace({
     }
   }
 
+  async function loadCyberSecEvalCatalog() {
+    try {
+      const payload = await listCyberSecEvalBenchmarks(token, detail.target.id);
+      setCyberSecEvalCatalog(payload);
+    } catch {
+      setCyberSecEvalCatalog(null);
+    }
+  }
+
+  async function importCyberSecEval(key: string, active: boolean) {
+    if (isViewer) return;
+    setCyberSecEvalImporting(key);
+    setCyberSecEvalError('');
+    setError('');
+    setMessage('');
+    try {
+      const result = await importCyberSecEvalBenchmark(token, detail.target.id, key, active);
+      if (active) {
+        setTestCases(result.dataset.rows.map(normalizeCaseForEditor));
+      }
+      await onRefresh(result.detail);
+      await loadDatasets();
+      setMessage(`Imported "${result.dataset.name}" (${result.dataset.rows.length} cases)${active ? ' and activated it.' : '.'}`);
+    } catch (err) {
+      setCyberSecEvalError(err instanceof Error ? err.message : 'Failed to import CyberSecEval benchmark');
+    } finally {
+      setCyberSecEvalImporting('');
+    }
+  }
+
   useEffect(() => {
     loadDatasets();
+    loadCyberSecEvalCatalog();
   }, [detail.target.id, token]);
 
   function updateProvider(index: number, patch: Partial<EvalStageConfigPayload['providers'][number]>) {
@@ -2284,6 +2328,60 @@ function EvalWorkspace({
               <p className="muted">No saved datasets yet.</p>
             )}
           </div>
+        </section>
+
+        <section className="subpanel">
+          <h3>CyberSecEval Benchmarks</h3>
+          <p className="field-help">
+            Forked from{' '}
+            <span title={cyberSecEvalCatalog?.sourceCommit || ''}>{cyberSecEvalCatalog?.sourceLabel || 'PurpleLlama CyberSecEval'}</span>
+            {' '}— vendored into datasets/cyberseceval/, never fetched at runtime. Importing adds a normal dataset below;
+            benchmark-specific scoring runs through this product's existing assertion catalog and judge-provider config.
+          </p>
+          {cyberSecEvalError ? <p className="error">{cyberSecEvalError}</p> : null}
+          <div className="dataset-list">
+            {(cyberSecEvalCatalog?.available || []).map((benchmark) => (
+              <div className="dataset-row" key={benchmark.key}>
+                <div>
+                  <strong>{benchmark.label}</strong>
+                  <p className="muted">
+                    {benchmark.rowCount} cases · {benchmark.requiresJudge ? 'requires judge provider' : 'no judge required'}
+                  </p>
+                  <p className="field-help">{benchmark.description}</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={isViewer || cyberSecEvalImporting === benchmark.key}
+                  title={viewerTitle}
+                  onClick={() => importCyberSecEval(benchmark.key, false)}
+                >
+                  {cyberSecEvalImporting === benchmark.key ? 'Importing...' : 'Import'}
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={isViewer || cyberSecEvalImporting === benchmark.key}
+                  title={viewerTitle}
+                  onClick={() => importCyberSecEval(benchmark.key, true)}
+                >
+                  Import and use
+                </button>
+              </div>
+            ))}
+          </div>
+          {(cyberSecEvalCatalog?.unavailable || []).length ? (
+            <details className="field-help">
+              <summary>{cyberSecEvalCatalog?.unavailable.length} benchmark(s) not available in this deployment</summary>
+              <ul>
+                {(cyberSecEvalCatalog?.unavailable || []).map((benchmark) => (
+                  <li key={benchmark.key}>
+                    <strong>{benchmark.label}:</strong> {benchmark.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </section>
 
         <section className="subpanel">
@@ -3821,9 +3919,9 @@ function EvidenceWorkspace({
             <div>
               <h3>Framework Compliance</h3>
               <p className="muted">
-                Control-level mapping from red-team results to ISO 42001, EU AI Act, NIST AI RMF, OWASP LLM/API/Agentic
-                Top 10, MITRE ATLAS, GDPR, and DoD AI Ethics — computed from every red-team run this target has, not
-                just the latest one.
+                Control-level mapping from red-team results — and from CyberSecEval benchmark results run through the
+                eval workspace — to ISO 42001, EU AI Act, NIST AI RMF, OWASP LLM/API/Agentic Top 10, MITRE ATLAS, GDPR,
+                and DoD AI Ethics — computed from every run this target has, not just the latest one.
               </p>
             </div>
             {report?.frameworkCompliance ? (
@@ -3836,8 +3934,8 @@ function EvidenceWorkspace({
             ) : null}
           </div>
           {report?.frameworkCompliance ? (
-            report.frameworkCompliance.redTeamRunsConsidered === 0 ? (
-              <p className="muted">No red-team runs yet for this target — run red-team to populate framework compliance evidence.</p>
+            report.frameworkCompliance.redTeamRunsConsidered === 0 && report.frameworkCompliance.cyberSecEvalRunsConsidered === 0 ? (
+              <p className="muted">No red-team or CyberSecEval runs yet for this target — run red-team, or run an eval with a CyberSecEval dataset activated, to populate framework compliance evidence.</p>
             ) : (
               <div className="drilldown-list">
                 {Object.values(report.frameworkCompliance.frameworks).map((fw) => {
@@ -3932,6 +4030,11 @@ function EvidenceWorkspace({
                       {finding.strategyApproximated ? (
                         <span className="pill pill-muted" title="This strategy is normally a stateful/multi-turn attack upstream; approximated here as a single self-hosted transform">
                           strategy approximated
+                        </span>
+                      ) : null}
+                      {finding.cyberSecEval ? (
+                        <span className="pill pill-muted" title={`Forked from ${finding.cyberSecEval.source} — never fetched at runtime, vendored into datasets/cyberseceval/`}>
+                          {finding.cyberSecEval.benchmark}
                         </span>
                       ) : null}
                     </button>

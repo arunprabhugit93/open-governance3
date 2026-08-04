@@ -596,6 +596,48 @@ export function deleteDataset(token: string, id: string, datasetId: string): Pro
   return request<void>(`/api/targets/${id}/datasets/${datasetId}`, token, { method: 'DELETE' });
 }
 
+export interface CyberSecEvalBenchmark {
+  key: string;
+  label: string;
+  description: string;
+  assertType: string;
+  category: string;
+  requiresJudge: boolean;
+  rowCount: number;
+}
+
+export interface CyberSecEvalUnavailableBenchmark {
+  key: string;
+  label: string;
+  reason: string;
+}
+
+export function listCyberSecEvalBenchmarks(
+  token: string,
+  id: string,
+): Promise<{
+  sourceLabel: string;
+  sourceRepo: string;
+  sourceCommit: string;
+  available: CyberSecEvalBenchmark[];
+  unavailable: CyberSecEvalUnavailableBenchmark[];
+}> {
+  return request(`/api/targets/${id}/stages/eval/cyberseceval-benchmarks`, token);
+}
+
+export function importCyberSecEvalBenchmark(
+  token: string,
+  id: string,
+  key: string,
+  active: boolean,
+): Promise<{ dataset: TargetDataset; detail: TargetDetailResponse }> {
+  return request<{ dataset: TargetDataset; detail: TargetDetailResponse }>(
+    `/api/targets/${id}/stages/eval/cyberseceval-benchmarks/${key}/import`,
+    token,
+    { method: 'POST', body: JSON.stringify({ active }) },
+  );
+}
+
 export interface TargetSchedulePayload {
   name: string;
   stageKeys: Array<'eval' | 'red_team' | 'model_audit'>;

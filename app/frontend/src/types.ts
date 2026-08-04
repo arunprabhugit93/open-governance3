@@ -293,10 +293,21 @@ export interface TargetReport {
     // multi-turn/adaptive attack upstream) and was approximated as a single self-hosted-LLM
     // transform instead — reduced fidelity vs upstream, always labeled.
     strategyApproximated?: boolean;
+    // Present only on rows imported from a CyberSecEval benchmark dataset (forked from
+    // PurpleLlama — see app/shared/cyberseceval.cjs).
+    cyberSecEval?: {
+      benchmark: string;
+      category: string;
+      source: string;
+      [key: string]: unknown;
+    };
   }>;
   frameworkCompliance: {
     pluginPassRateThreshold: number;
     redTeamRunsConsidered: number;
+    // Eval-stage runs that contributed at least one CyberSecEval-tagged row to categoryStats —
+    // counted separately from redTeamRunsConsidered so "N red-team runs" text stays accurate.
+    cyberSecEvalRunsConsidered: number;
     frameworksEvaluated: number;
     frameworksCompliant: number;
     totalFrameworks: number;

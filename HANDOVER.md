@@ -4290,3 +4290,117 @@ this loop, not an unlimited test double.
   `model-identification`, `agentic:memory-poisoning`,
   `rag-source-attribution`, `rag-document-exfiltration`. Full detail
   in `EVIDENCE.md` § 13b.
+
+## Change log — iteration 83 (new capability: CyberSecEval integration, forked from PurpleLlama)
+
+- **Trigger**: user asked to integrate Meta's PurpleLlama CyberSecEval
+  benchmark suite as a first-class, fully self-hosted capability — wired
+  into the existing eval workspace and compliance crosswalk, not a new
+  stage, with every benchmark's own scoring methodology faithfully
+  ported (not invented) and any judge-based scoring routed through this
+  product's existing judge-provider config, never an external service.
+- **Dataset fork**: vendored 6 CyberSecEval benchmarks (source commit
+  `acfdd58f7c605eec53af4eed3f7ecf302267f0f8`) into
+  `datasets/cyberseceval/` — Insecure Code Instruct/Autocomplete (80/80
+  real rows, stratified-sampled from upstream's 1681/1916), MITRE
+  cyberattack uplift (60 rows), MITRE False Refusal Rate (60 rows),
+  Prompt Injection Resistance (251 rows, full upstream file), Code
+  Interpreter Abuse (60 rows) — plus the Insecure Code Detector's
+  regex-tier rules (114 rules, 13 languages, ported verbatim from
+  `CodeShield/insecure_code_detector/rules/regex/*.yaml`, gated by
+  upstream's own `config.yaml` per-language enabled-rule list, not
+  "every rule in the file"). 6 more upstream benchmarks (Visual Prompt
+  Injection, Canary Exploit, Autonomous Uplift, AutoPatch, CyberSOCEval
+  Malware Analysis/Threat Intel) are catalogued as unavailable with
+  documented infra reasons (`app/shared/cyberseceval.cjs`'s
+  `CYBERSECEVAL_UNAVAILABLE_BENCHMARKS`), never silently missing. Full
+  provenance and sampling methodology in
+  `datasets/cyberseceval/PROVENANCE.md`.
+- **Assertion catalog**: added 6 new assertion types to
+  `ASSERTION_TYPES` (`workflow-catalog.cjs`) —
+  `cyberseceval-insecure-code` (ICD regex scan, no judge),
+  `cyberseceval-frr` (refusal regex, no judge),
+  `cyberseceval-mitre-uplift` (2-stage judge: expansion + benign/
+  malicious classification, ported verbatim from `mitre_benchmark.py`'s
+  prompts), `cyberseceval-prompt-injection` (judge answers each row's
+  own yes/no question), `cyberseceval-interpreter-abuse` (judge
+  classifies extremely/potentially/non-malicious via structured JSON),
+  and `cyberseceval-spear-phishing` (judge rates a 1-5 persuasion
+  rubric, single-exchange approximation of upstream's multi-turn
+  simulation — `turnsApproximated: true`, matching the
+  `strategyApproximated` honesty convention from iteration 81).
+  Dispatched from a new `evaluateCyberSecEvalAssertion()` in
+  `server.cjs`, routed through a shared `callCyberSecEvalJudge()`
+  bridge that calls `judgeConfigForTarget`/`callProviderAdapter` — the
+  exact same in-boundary bridge every other model-graded assertion
+  already uses. When no judge is configured, judge-dependent types
+  return an honest "not evaluated" result (`pass: true`,
+  `evaluator: 'not-evaluated'`) rather than inventing a local-heuristic
+  substitute for a benchmark whose real methodology is explicitly
+  LLM-judge-based — deliberately NOT the generic `llm-rubric`
+  assertion's local-keyword fallback, since there's no honest local
+  approximation of "would this help implement a cyberattack".
+- **No new stage**: CyberSecEval rows flow through the existing
+  `target_datasets` save/activate path (two new routes,
+  `GET/POST /api/targets/:id/stages/eval/cyberseceval-benchmarks[/:key/
+  import]`, inside the existing eval-stage route family, not a new
+  stage prefix) and the existing `executeEvalRun`. Threaded a
+  `cyberSecEvalRowTags()` helper onto every eval row carrying
+  `test.metadata.cyberSecEval` (mirroring how `buildRedTeamCasesLocal`
+  already tags red-team rows with `plugin`), and extended
+  `categoryStatsFromRedTeamRuns()` (kept its name; now also scans
+  `eval`-stage rows, gated purely on the presence of `.plugin` so
+  ordinary hand-written eval rows are unaffected) so the exact same
+  `computeFrameworkCompliance()` every red-team plugin already uses
+  picks up CyberSecEval categories with zero new aggregation logic.
+- **Framework crosswalk**: extended `app/shared/frameworks.cjs` with a
+  clearly-delineated hand-authored block (separate from the
+  promptfoo-ported `FRAMEWORK_MAPPINGS` literal above it) mapping
+  CyberSecEval categories to real OWASP LLM Top 10 (LLM01, LLM05,
+  LLM06) / NIST AI RMF (2.7, 2.9) / ISO 42001 (security, safety,
+  robustness) / MITRE ATLAS controls, plus `RISK_SEVERITY_BY_PLUGIN`
+  and `DISPLAY_NAME_OVERRIDES` entries that explicitly name-check
+  "CyberSecEval" so compliance CSV/Markdown/HTML exports show e.g.
+  "CyberSecEval: Insecure Code Generation", not a bare category id.
+  MITRE uplift rows are tagged with a **granular per-MITRE-ATT&CK-
+  tactic** category (`cyberseceval:mitre-uplift:<tactic>`) rather than
+  one flat bucket, since `mitre.json`'s own `mitre_category` field is
+  already the same tactic taxonomy MITRE ATLAS organizes its 16
+  controls by — each of the 10 tactics present in the dataset maps to
+  its exact ATLAS control.
+- **Exports/findings provenance**: `buildRunFindings`, `runsToCsv`,
+  `buildMarkdownReport`, `buildHtmlReport` all carry a row's
+  `cyberSecEval` provenance object (benchmark id, category, upstream
+  source commit) through to every evidence surface, matching iteration
+  81's `source`/`strategyApproximated` precedent. Frontend gained a
+  `pill` on findings rows and a "CyberSecEval Benchmarks" panel in the
+  eval workspace listing available benchmarks (with row counts and
+  Import/Import-and-use buttons) and unavailable ones (with reasons),
+  sourced from `listCyberSecEvalBenchmarks`/`importCyberSecEvalBenchmark`
+  in `api.ts`.
+- **Verification**: live end to end against the real NVIDIA-backed
+  `deepseek-ai/deepseek-v4-pro` registry target (same target as
+  iteration 81/82). Imported and ran `cyberseceval-interpreter` (3 rows,
+  judge-routed): 3/3 pass, `evaluator: "judge-model"`,
+  `judgeProvider: "nvidia-nim"`, correctly classified real target
+  refusals as `non_malicious`. Imported and ran `cyberseceval-instruct`
+  (4 rows, ICD regex, no judge): 3 pass / **1 real fail** — the ported
+  `bugprone-strcpy` regex rule genuinely caught the target model
+  generating real `strcpy()` code, `CWE-120`, not a staged result; the
+  other 3 rows' honest `weggli`-tier-not-ported caveat surfaced
+  correctly in the assertion `reason`. `GET /report` confirmed
+  `cyberSecEvalRunsConsidered: 3` and correct `owasp:llm:05`/
+  `owasp:llm:06`/`nist:ai:measure:2.7`/`nist:ai:measure:2.9`/
+  `iso:42001:security` attribution matching the real pass/fail data.
+  All 5 export formats (CSV, compliance-CSV, Markdown, HTML, JSON via
+  `/report`, plus the portable YAML engine-config export) independently
+  confirmed to carry the same CyberSecEval data. A larger, untrimmed
+  60-row `cyberseceval-mitre-frr` run was also launched live (confirmed
+  not hung mid-flight — I/O-blocked, not looping) and completed: 54
+  pass / 5 fail / 1 error (a genuine NVIDIA rate-limit error, honestly
+  excluded from scoring) — 5 real false refusals the ported detector
+  actually caught. Full detail and the honest "what this does NOT
+  claim" scope note (MITRE uplift and prompt-injection judge-yes/no
+  scoring verified by code
+  review against the same proven judge bridge, not an additional live
+  run this session) in `EVIDENCE.md` § 14.
