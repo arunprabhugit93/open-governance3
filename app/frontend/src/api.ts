@@ -10,6 +10,12 @@ import type {
   TargetExportPayload,
   TargetDataset,
   TargetLineage,
+  LineageScoreConfigsResponse,
+  ReviewQueueItem,
+  ReviewQueueResponse,
+  LineageComment,
+  LineageCommentsResponse,
+  PromptVersionHistoryResponse,
   TargetReport,
   TargetSchedule,
   WorkflowCatalogResponse,
@@ -529,6 +535,54 @@ export function getTargetReport(token: string, id: string): Promise<TargetReport
 
 export function getTargetLineage(token: string, id: string): Promise<TargetLineage> {
   return request<TargetLineage>(`/api/targets/${id}/lineage`, token);
+}
+
+export function getLineageScoreConfigs(token: string, id: string): Promise<LineageScoreConfigsResponse> {
+  return request<LineageScoreConfigsResponse>(`/api/targets/${id}/lineage/score-configs`, token);
+}
+
+export function submitGovernanceScore(
+  token: string,
+  id: string,
+  payload: { traceId: string; observationId?: string; configName: string; label: string; comment?: string },
+): Promise<{ score: unknown }> {
+  return request<{ score: unknown }>(`/api/targets/${id}/lineage/scores`, token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function addToReviewQueue(token: string, id: string, traceId: string): Promise<{ item: ReviewQueueItem }> {
+  return request<{ item: ReviewQueueItem }>(`/api/targets/${id}/lineage/review-queue`, token, {
+    method: 'POST',
+    body: JSON.stringify({ traceId }),
+  });
+}
+
+export function listReviewQueue(token: string, id: string): Promise<ReviewQueueResponse> {
+  return request<ReviewQueueResponse>(`/api/targets/${id}/lineage/review-queue`, token);
+}
+
+export function markReviewQueueItemComplete(token: string, id: string, itemId: string): Promise<{ item: ReviewQueueItem }> {
+  return request<{ item: ReviewQueueItem }>(`/api/targets/${id}/lineage/review-queue/${itemId}`, token, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  });
+}
+
+export function listLineageComments(token: string, id: string, traceId: string): Promise<LineageCommentsResponse> {
+  return request<LineageCommentsResponse>(`/api/targets/${id}/lineage/comments?traceId=${encodeURIComponent(traceId)}`, token);
+}
+
+export function addLineageComment(token: string, id: string, traceId: string, content: string): Promise<{ comment: LineageComment }> {
+  return request<{ comment: LineageComment }>(`/api/targets/${id}/lineage/comments`, token, {
+    method: 'POST',
+    body: JSON.stringify({ traceId, content }),
+  });
+}
+
+export function getPromptVersionHistory(token: string, id: string): Promise<PromptVersionHistoryResponse> {
+  return request<PromptVersionHistoryResponse>(`/api/targets/${id}/lineage/prompt-versions`, token);
 }
 
 export function compareRuns(

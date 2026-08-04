@@ -943,6 +943,24 @@ function buildMarkdownReport(report) {
     lines.push(lineageSection.datasets?.length ? `${lineageSection.datasets.length} dataset event(s) recorded.` : 'No dataset events recorded.');
     lines.push('', '### Retrieval context (RAG) / tool calls (agent)', '');
     lines.push(`${lineageSection.retrievalContexts?.length || 0} retrieval-context observation(s), ${lineageSection.toolCalls?.length || 0} tool-call observation(s).`);
+    lines.push('', '### Governance scores', '');
+    if (!lineageSection.governanceScores?.length) {
+      lines.push('No governance scores recorded — human review sign-off is optional, not required for this report to be complete.');
+    } else {
+      lines.push('| Score | Value | Timestamp | Comment |', '| --- | --- | --- | --- |');
+      for (const score of lineageSection.governanceScores) {
+        lines.push(`| ${markdownEscape(score.name)} | ${markdownEscape(String(score.value))} | ${score.timestamp} | ${markdownEscape(score.comment || '').slice(0, 200)} |`);
+      }
+    }
+    lines.push('', '### Cost & usage (governance budget visibility)', '');
+    if (!lineageSection.usageSummary?.length) {
+      lines.push('No inference calls recorded yet.');
+    } else {
+      lines.push('| Model | Calls | Input tokens | Output tokens | Total tokens | Cost (USD) |', '| --- | ---: | ---: | ---: | ---: | ---: |');
+      for (const row of lineageSection.usageSummary) {
+        lines.push(`| ${markdownEscape(row.model)} | ${row.calls} | ${row.inputTokens} | ${row.outputTokens} | ${row.totalTokens} | ${row.totalCostUsd === null ? 'unknown (no pricing data for this model)' : `$${row.totalCostUsd.toFixed(4)}`} |`);
+      }
+    }
   }
   return `${lines.join('\n')}\n`;
 }
@@ -976,6 +994,40 @@ function buildLineageHtmlSection(lineageSection) {
     <h3>Prompt versions / datasets / retrieval / tool calls</h3>
     <p>${lineageSection.promptVersions?.length || 0} prompt version change(s), ${lineageSection.datasets?.length || 0} dataset event(s),
     ${lineageSection.retrievalContexts?.length || 0} retrieval-context observation(s), ${lineageSection.toolCalls?.length || 0} tool-call observation(s).</p>
+    <h3>Governance scores</h3>
+    ${
+      (lineageSection.governanceScores || []).length
+        ? `<table><thead><tr><th>Score</th><th>Value</th><th>Timestamp</th><th>Comment</th></tr></thead><tbody>${lineageSection.governanceScores
+            .map(
+              (score) => `
+      <tr>
+        <td>${escapeHtml(score.name)}</td>
+        <td>${escapeHtml(String(score.value))}</td>
+        <td>${escapeHtml(score.timestamp)}</td>
+        <td>${escapeHtml(score.comment || '').slice(0, 200)}</td>
+      </tr>`,
+            )
+            .join('')}</tbody></table>`
+        : '<p>No governance scores recorded — human review sign-off is optional, not required for this report to be complete.</p>'
+    }
+    <h3>Cost &amp; usage (governance budget visibility)</h3>
+    ${
+      (lineageSection.usageSummary || []).length
+        ? `<table><thead><tr><th>Model</th><th>Calls</th><th>Input tokens</th><th>Output tokens</th><th>Total tokens</th><th>Cost (USD)</th></tr></thead><tbody>${lineageSection.usageSummary
+            .map(
+              (row) => `
+      <tr>
+        <td>${escapeHtml(row.model)}</td>
+        <td>${row.calls}</td>
+        <td>${row.inputTokens}</td>
+        <td>${row.outputTokens}</td>
+        <td>${row.totalTokens}</td>
+        <td>${row.totalCostUsd === null ? 'unknown (no pricing data)' : `$${row.totalCostUsd.toFixed(4)}`}</td>
+      </tr>`,
+            )
+            .join('')}</tbody></table>`
+        : '<p>No inference calls recorded yet.</p>'
+    }
   `;
 }
 
@@ -6589,6 +6641,16 @@ function lineageCsvBlock(lineageSection) {
   for (const entry of lineageSection.trainingProvenance || []) {
     rows.push([String(entry.attestationSource), entry.unattested ? 'Yes' : 'No', String(entry.note || '').slice(0, 200)]);
   }
+  rows.push([]);
+  rows.push(['Governance score', 'Value', 'Timestamp', 'Comment']);
+  for (const score of lineageSection.governanceScores || []) {
+    rows.push([score.name, String(score.value), score.timestamp, String(score.comment || '').slice(0, 200)]);
+  }
+  rows.push([]);
+  rows.push(['Model', 'Calls', 'Input tokens', 'Output tokens', 'Total tokens', 'Cost (USD)']);
+  for (const row of lineageSection.usageSummary || []) {
+    rows.push([row.model, row.calls, row.inputTokens, row.outputTokens, row.totalTokens, row.totalCostUsd === null ? 'unknown' : row.totalCostUsd.toFixed(4)]);
+  }
   return rows.map((row) => row.map(csvCell).join(',')).join('\n');
 }
 
@@ -7378,6 +7440,16 @@ app.patch('/api/targets/:id/stages/eval/config', requireAuth, requireAdmin, asyn
       },
       tags: ['prompt-version', 'eval-prompt-template-update'],
     });
+    // Real Langfuse Prompt-object version, additive to the trace-metadata record above — this is
+    // this capability's actual "backing storage" per its original scope, giving real Langfuse-
+    // native version numbers (not just a count of trace events) queryable via
+    // GET /api/targets/:id/lineage/prompt-versions. Fire-and-forget: never blocks or fails this
+    // response if Langfuse is briefly unreachable.
+    if (lineage.isLineageConfigured()) {
+      lineage
+        .upsertPromptVersion(req.params.id, req.body.promptTemplate, `Updated via eval config PATCH at ${lineage.nowIso()}`)
+        .catch(() => {});
+    }
   }
   res.json(updated);
 });
@@ -8096,7 +8168,7 @@ app.get('/api/targets/:id/export/:format', requireAuth, async (req, res) => {
       ? '# Lineage: not configured — this deployment has no self-hosted Langfuse instance wired up.'
       : !lineageSection.available
         ? `# Lineage: unavailable — ${lineageSection.reason || 'Langfuse unreachable'}`
-        : `# Lineage: ${lineageSection.summary?.totalTraces ?? 0} trace(s), ${lineageSection.summary?.totalObservations ?? 0} observation(s), ${lineageSection.summary?.totalRuns ?? 0} run(s), ${lineageSection.summary?.totalInferenceCalls ?? 0} inference call(s). Full graph: GET /api/targets/${payload.target.id}/lineage`;
+        : `# Lineage: ${lineageSection.summary?.totalTraces ?? 0} trace(s), ${lineageSection.summary?.totalObservations ?? 0} observation(s), ${lineageSection.summary?.totalRuns ?? 0} run(s), ${lineageSection.summary?.totalInferenceCalls ?? 0} inference call(s), ${lineageSection.governanceScores?.length ?? 0} governance score(s). Full graph: GET /api/targets/${payload.target.id}/lineage`;
     res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${safeName}-engine-config.yaml"`);
     return res.send(`${lineageComment}\n${toYaml(portable)}`);
@@ -8710,6 +8782,7 @@ async function buildLineageGraph(target) {
   const retrievalContexts = [];
   const toolCalls = [];
   const exports = [];
+  const governanceScores = [];
 
   for (const detail of traceDetails) {
     if (!detail) continue;
@@ -8770,6 +8843,7 @@ async function buildLineageGraph(target) {
           input: obs.input,
           output: obs.output,
           usage: obs.usageDetails,
+          cost: obs.costDetails,
           level: obs.level,
         });
       } else if (obs.type === 'RETRIEVER') {
@@ -8778,7 +8852,47 @@ async function buildLineageGraph(target) {
         toolCalls.push({ traceId: detail.id, observationId: obs.id, name: obs.name, input: obs.input, metadata: obsMeta });
       }
     }
+
+    for (const score of detail.scores || []) {
+      governanceScores.push({
+        id: score.id,
+        traceId: detail.id,
+        observationId: score.observationId || null,
+        name: score.name,
+        value: score.stringValue ?? score.value,
+        comment: score.comment || null,
+        dataType: score.dataType,
+        timestamp: score.timestamp,
+      });
+    }
   }
+
+  // Cost & usage governance summary — aggregated per model from the exact same usageDetails/
+  // costDetails every GENERATION observation already carries (real token counts from each
+  // provider's own response; real $ cost only when Langfuse's models catalog has a matching
+  // price entry for that model — e.g. a known OpenAI/Anthropic model — never fabricated. A
+  // self-hosted/custom model Langfuse has no pricing data for correctly shows cost: null, not a
+  // guessed number).
+  const usageByModel = new Map();
+  for (const call of inferenceCalls) {
+    const modelKey = call.model || 'unknown';
+    if (!usageByModel.has(modelKey)) {
+      usageByModel.set(modelKey, { model: modelKey, calls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCostUsd: 0, costKnown: false });
+    }
+    const bucket = usageByModel.get(modelKey);
+    bucket.calls += 1;
+    bucket.inputTokens += Number(call.usage?.input || 0);
+    bucket.outputTokens += Number(call.usage?.output || 0);
+    bucket.totalTokens += Number(call.usage?.total || 0);
+    if (call.cost && typeof call.cost.total === 'number') {
+      bucket.totalCostUsd += call.cost.total;
+      bucket.costKnown = true;
+    }
+  }
+  const usageSummary = Array.from(usageByModel.values()).map(({ costKnown, ...bucket }) => ({
+    ...bucket,
+    totalCostUsd: costKnown ? bucket.totalCostUsd : null,
+  }));
 
   return {
     configured: true,
@@ -8801,6 +8915,12 @@ async function buildLineageGraph(target) {
     retrievalContexts,
     toolCalls,
     exports,
+    // Human governance sign-off (compliance-review, risk-rating) plus this deployment's own
+    // automated scores (e.g. the per-run pass-rate) — every score Langfuse has recorded for any
+    // trace in this target's history, real and unfiltered.
+    governanceScores,
+    // Cost/usage governance visibility — per-model token counts and (where known) real $ cost.
+    usageSummary,
   };
 }
 
@@ -8814,6 +8934,137 @@ app.get('/api/targets/:id/lineage', requireAuth, async (req, res) => {
   }
   const result = await buildLineageGraph(payload.target);
   res.json(result);
+});
+
+// Lists the real, reusable governance score-config rubrics (compliance-review, risk-rating —
+// see lineage.cjs's GOVERNANCE_SCORE_CONFIGS) this deployment's Langfuse project has, creating
+// them on first call if missing. Read-only for the UI's scoring dropdown; the actual scores are
+// submitted via the route below.
+app.get('/api/targets/:id/lineage/score-configs', requireAuth, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.json({ configured: false, configs: [] });
+  }
+  const configs = await lineage.ensureGovernanceScoreConfigs();
+  res.json({ configured: true, configs: configs || [] });
+});
+
+// Human governance sign-off — a real, auditable score against a real Langfuse score config,
+// distinct from the automated pass/fail every stage run already threads through
+// AssuranceEvidence. Not a new stage: this attaches to an existing trace/observation this
+// deployment's own instrumentation already created.
+app.post('/api/targets/:id/lineage/scores', requireAuth, requireAdmin, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.status(400).json({ error: 'Lineage capability is not configured for this deployment' });
+  }
+  const { traceId, observationId, configName, label, comment } = req.body || {};
+  if (!traceId || !configName || !label) {
+    return res.status(400).json({ error: 'traceId, configName, and label are required' });
+  }
+  const result = await lineage.emitGovernanceScore({
+    traceId,
+    observationId,
+    configName,
+    label,
+    comment,
+    authorUserId: req.user?.sub,
+  });
+  if (!result.ok) {
+    return res.status(400).json({ error: result.reason });
+  }
+  res.status(201).json({ score: result.score });
+});
+
+// Flags a trace for human governance review — adds it to the shared "governance-review"
+// annotation queue (created on first use). Not a new stage: this is a review workflow over
+// traces this deployment's own instrumentation already created.
+app.post('/api/targets/:id/lineage/review-queue', requireAuth, requireAdmin, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.status(400).json({ error: 'Lineage capability is not configured for this deployment' });
+  }
+  const { traceId } = req.body || {};
+  if (!traceId) {
+    return res.status(400).json({ error: 'traceId is required' });
+  }
+  const result = await lineage.addToReviewQueue(traceId);
+  if (!result.ok) {
+    return res.status(400).json({ error: result.reason });
+  }
+  res.status(201).json({ item: result.item });
+});
+
+// Lists this target's own review-queue items — the shared queue is project-scoped (same
+// convention as sessions/traces), so this filters to only the trace ids that belong to this
+// target's own lineage history.
+app.get('/api/targets/:id/lineage/review-queue', requireAuth, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.json({ configured: false, items: [] });
+  }
+  const sessionResult = await lineage.fetchSessionTraces(req.params.id);
+  const traceIds = new Set((sessionResult.traces || []).map((t) => t.id));
+  const listResult = await lineage.listReviewQueueItems();
+  if (!listResult.ok) {
+    return res.json({ configured: true, available: false, reason: listResult.reason, items: [] });
+  }
+  const items = listResult.items.filter((item) => traceIds.has(item.objectId));
+  res.json({ configured: true, available: true, items });
+});
+
+app.patch('/api/targets/:id/lineage/review-queue/:itemId', requireAuth, requireAdmin, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.status(400).json({ error: 'Lineage capability is not configured for this deployment' });
+  }
+  const result = await lineage.markReviewQueueItemComplete(req.params.itemId);
+  if (!result.ok) {
+    return res.status(400).json({ error: result.reason });
+  }
+  res.json({ item: result.item });
+});
+
+// Audit-trail comments on a trace — free-text collaboration notes, distinct from structured
+// governance scores (task above). GET requires objectId (Langfuse errors without it), so this
+// route mirrors that requirement rather than silently defaulting.
+app.get('/api/targets/:id/lineage/comments', requireAuth, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.json({ configured: false, comments: [] });
+  }
+  const { traceId } = req.query;
+  if (!traceId) {
+    return res.status(400).json({ error: 'traceId query parameter is required' });
+  }
+  const result = await lineage.listComments({ objectId: String(traceId), objectType: 'TRACE' });
+  if (!result.ok) {
+    return res.json({ configured: true, available: false, reason: result.reason, comments: [] });
+  }
+  res.json({ configured: true, available: true, comments: result.comments });
+});
+
+app.post('/api/targets/:id/lineage/comments', requireAuth, requireAdmin, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.status(400).json({ error: 'Lineage capability is not configured for this deployment' });
+  }
+  const { traceId, content } = req.body || {};
+  if (!traceId || !content) {
+    return res.status(400).json({ error: 'traceId and content are required' });
+  }
+  const result = await lineage.addComment({ objectId: traceId, objectType: 'TRACE', content, authorUserId: req.user?.sub });
+  if (!result.ok) {
+    return res.status(400).json({ error: result.reason });
+  }
+  res.status(201).json({ comment: result.comment });
+});
+
+// Real Langfuse-native prompt version history for this target — see upsertPromptVersion's
+// wiring in the eval config PATCH route above. Additive to (not a replacement for) the
+// trace-metadata promptVersions array the main lineage graph already returns.
+app.get('/api/targets/:id/lineage/prompt-versions', requireAuth, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.json({ configured: false, versions: [] });
+  }
+  const result = await lineage.listPromptVersionHistory(req.params.id);
+  if (!result.ok) {
+    return res.json({ configured: true, available: false, reason: result.reason, versions: [] });
+  }
+  res.json({ configured: true, available: true, name: result.name, versions: result.versions, labels: result.labels, lastUpdatedAt: result.lastUpdatedAt });
 });
 
 app.post('/api/targets', requireAuth, requireAdmin, async (req, res) => {

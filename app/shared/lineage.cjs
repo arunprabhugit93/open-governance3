@@ -48,7 +48,12 @@ function lineageConfig() {
   const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
   const secretKey = process.env.LANGFUSE_SECRET_KEY;
   if (!baseUrl || !publicKey || !secretKey) return null;
-  return { baseUrl: String(baseUrl).replace(/\/$/, ''), publicKey, secretKey };
+  // Only the comments API requires projectId as an explicit input field (everything else
+  // resolves the project from the API key pair itself) — matches
+  // docker-compose.langfuse.yml's LANGFUSE_INIT_PROJECT_ID, the fixed project this deployment's
+  // API key pair was auto-provisioned into.
+  const projectId = process.env.LANGFUSE_PROJECT_ID || 'og3-lineage';
+  return { baseUrl: String(baseUrl).replace(/\/$/, ''), publicKey, secretKey, projectId };
 }
 
 function isLineageConfigured() {
@@ -131,6 +136,234 @@ async function fetchTraceDetail(traceId) {
   const result = await langfuseGet(`/api/public/traces/${encodeURIComponent(traceId)}`);
   if (!result.ok || result.notFound) return null;
   return result.data || null;
+}
+
+async function langfuseRequest(method, path, body) {
+  const cfg = lineageConfig();
+  if (!cfg) return { ok: false, reason: 'not-configured' };
+  const auth = Buffer.from(`${cfg.publicKey}:${cfg.secretKey}`).toString('base64');
+  try {
+    const res = await fetch(`${cfg.baseUrl}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', Authorization: `Basic ${auth}` },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
+    });
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : undefined; } catch { data = text; }
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}: ${JSON.stringify(data).slice(0, 300)}` };
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+}
+
+// Real governance rubrics — human-reviewable, auditable structured scoring, distinct from the
+// automated pass/fail/error counts every stage run already threads through AssuranceEvidence.
+// These are Langfuse "score configs" (reusable rubric definitions), created once and reused —
+// see ensureGovernanceScoreConfigs() below, called lazily so a fresh Langfuse project doesn't
+// need a separate seed step.
+const GOVERNANCE_SCORE_CONFIGS = [
+  {
+    name: 'compliance-review',
+    dataType: 'CATEGORICAL',
+    categories: [
+      { label: 'Approved', value: 1 },
+      { label: 'Rejected', value: 0 },
+      { label: 'Needs More Review', value: 2 },
+    ],
+    description: 'Human governance reviewer sign-off on this finding/run — distinct from automated pass/fail.',
+  },
+  {
+    name: 'risk-rating',
+    dataType: 'CATEGORICAL',
+    categories: [
+      { label: 'Low', value: 0 },
+      { label: 'Medium', value: 1 },
+      { label: 'High', value: 2 },
+    ],
+    description: 'Human-assessed risk rating for this finding/run.',
+  },
+];
+
+let scoreConfigCache = null;
+
+// Idempotent: fetches existing score configs and only creates the ones missing by name, so this
+// is safe to call on every request that needs the config list (cached in-process afterward).
+async function ensureGovernanceScoreConfigs() {
+  if (scoreConfigCache) return scoreConfigCache;
+  const existing = await langfuseRequest('GET', '/api/public/score-configs?limit=100');
+  if (!existing.ok) return null;
+  const byName = new Map((existing.data?.data || []).filter((c) => !c.isArchived).map((c) => [c.name, c]));
+  for (const wanted of GOVERNANCE_SCORE_CONFIGS) {
+    if (byName.has(wanted.name)) continue;
+    const created = await langfuseRequest('POST', '/api/public/score-configs', wanted);
+    if (created.ok) byName.set(wanted.name, created.data);
+  }
+  scoreConfigCache = Array.from(byName.values()).filter((c) => GOVERNANCE_SCORE_CONFIGS.some((w) => w.name === c.name));
+  return scoreConfigCache;
+}
+
+// Submits a human governance score against a real score config (categorical value resolved from
+// the config's own categories, so an invalid label is rejected before it ever reaches Langfuse).
+async function emitGovernanceScore({ traceId, observationId, configName, label, comment, authorUserId }) {
+  const configs = await ensureGovernanceScoreConfigs();
+  if (!configs) return { ok: false, reason: 'score configs unavailable' };
+  const config = configs.find((c) => c.name === configName);
+  if (!config) return { ok: false, reason: `unknown score config "${configName}"` };
+  const category = (config.categories || []).find((c) => c.label === label);
+  if (!category) return { ok: false, reason: `unknown category "${label}" for "${configName}"` };
+  // The public /scores create endpoint doesn't accept authorUserId as an input field (that's
+  // only settable via annotation-queue-created scores tied to a real logged-in Langfuse user,
+  // which doesn't apply here — this deployment authenticates via API key). Folded into the
+  // comment instead so the reviewer's identity is still genuinely recorded, not silently lost.
+  const attributedComment = authorUserId ? `[reviewer: ${authorUserId}]${comment ? ` ${comment}` : ''}` : comment;
+  // CreateScoreValue: categorical/text scores take the string label, not the config's numeric
+  // value — numeric-only for BOOLEAN/NUMERIC dataTypes (see commons.yml's CreateScoreValue docs
+  // and the ScoreBody examples, which pass value: "partially correct" for a CATEGORICAL score).
+  const result = await langfuseRequest('POST', '/api/public/scores', {
+    traceId,
+    observationId,
+    name: configName,
+    value: category.label,
+    dataType: 'CATEGORICAL',
+    configId: config.id,
+    comment: attributedComment,
+    environment: ENVIRONMENT,
+  });
+  if (!result.ok) return result;
+  return { ok: true, score: result.data };
+}
+
+const REVIEW_QUEUE_NAME = 'governance-review';
+
+let reviewQueueCache = null;
+
+// Idempotent create-or-get for the single shared "governance-review" annotation queue, linked to
+// the same real score configs emitGovernanceScore uses — so a human reviewer working this queue
+// (in Langfuse's own UI, if they ever go look, though this product's own Lineage tab is the
+// intended surface) sees the same rubrics this product's scoring form offers.
+async function ensureReviewQueue() {
+  if (reviewQueueCache) return reviewQueueCache;
+  const configs = await ensureGovernanceScoreConfigs();
+  const existing = await langfuseRequest('GET', '/api/public/annotation-queues?limit=100');
+  if (!existing.ok) return null;
+  const found = (existing.data?.data || []).find((q) => q.name === REVIEW_QUEUE_NAME);
+  if (found) {
+    reviewQueueCache = found;
+    return found;
+  }
+  const created = await langfuseRequest('POST', '/api/public/annotation-queues', {
+    name: REVIEW_QUEUE_NAME,
+    description: 'Findings/runs flagged for human governance review — sign off with a real compliance-review/risk-rating score.',
+    scoreConfigIds: (configs || []).map((c) => c.id),
+  });
+  if (!created.ok) return null;
+  reviewQueueCache = created.data;
+  return created.data;
+}
+
+// Flags a trace for human review — adds it to the shared queue as a PENDING item. Idempotent in
+// spirit (Langfuse doesn't reject a duplicate objectId, but the list endpoint below dedupes by
+// objectId so flagging the same trace twice doesn't show as two rows).
+async function addToReviewQueue(traceId) {
+  const queue = await ensureReviewQueue();
+  if (!queue) return { ok: false, reason: 'review queue unavailable' };
+  const result = await langfuseRequest('POST', `/api/public/annotation-queues/${encodeURIComponent(queue.id)}/items`, {
+    objectId: traceId,
+    objectType: 'TRACE',
+  });
+  if (!result.ok) return result;
+  return { ok: true, item: result.data };
+}
+
+// Lists every review-queue item, most-recent first — callers filter to the trace ids relevant to
+// their target (this queue is shared across the whole project, matching Langfuse's own project-
+// scoped queue model, same as sessions/traces already are).
+async function listReviewQueueItems() {
+  const queue = await ensureReviewQueue();
+  if (!queue) return { ok: false, reason: 'review queue unavailable', items: [] };
+  const result = await langfuseRequest('GET', `/api/public/annotation-queues/${encodeURIComponent(queue.id)}/items?limit=100`);
+  if (!result.ok) return { ok: false, reason: result.reason, items: [] };
+  return { ok: true, queueId: queue.id, items: result.data?.data || [] };
+}
+
+async function markReviewQueueItemComplete(itemId) {
+  const queue = await ensureReviewQueue();
+  if (!queue) return { ok: false, reason: 'review queue unavailable' };
+  const result = await langfuseRequest('PATCH', `/api/public/annotation-queues/${encodeURIComponent(queue.id)}/items/${encodeURIComponent(itemId)}`, {
+    status: 'COMPLETED',
+  });
+  if (!result.ok) return result;
+  return { ok: true, item: result.data };
+}
+
+// Audit-trail comments — unlike scores (fixed rubric, single value) these are free-text
+// collaboration notes attached to a trace, e.g. "escalated to legal, see ticket #4521" or
+// "confirmed with the model vendor this is expected behavior". authorUserId IS a real settable
+// input field on this endpoint (unlike /scores), so the reviewer's identity is genuinely
+// recorded, not folded into the text.
+async function addComment({ objectId, objectType = 'TRACE', content, authorUserId }) {
+  const cfg = lineageConfig();
+  if (!cfg) return { ok: false, reason: 'not-configured' };
+  if (!content || !content.trim()) return { ok: false, reason: 'comment content is required' };
+  const result = await langfuseRequest('POST', '/api/public/comments', {
+    projectId: cfg.projectId,
+    objectType,
+    objectId,
+    content: content.slice(0, 5000),
+    authorUserId,
+  });
+  if (!result.ok) return result;
+  return { ok: true, comment: result.data };
+}
+
+// Lists comments for a specific object (trace or observation) — Langfuse requires objectType
+// whenever objectId is provided, so this always sends both.
+async function listComments({ objectId, objectType = 'TRACE' }) {
+  const result = await langfuseRequest(
+    'GET',
+    `/api/public/comments?objectType=${encodeURIComponent(objectType)}&objectId=${encodeURIComponent(objectId)}&limit=100`,
+  );
+  if (!result.ok) return { ok: false, reason: result.reason, comments: [] };
+  return { ok: true, comments: result.data?.data || [] };
+}
+
+// Real Langfuse Prompt objects as the backing store for prompt-version lineage — per this
+// capability's original scope ("use Langfuse's prompt versioning as backing storage... do not
+// surface Langfuse's authoring UI"). Each target gets one stably-named text prompt
+// (`og3-target-<id>`); POSTing to the same name creates a new version automatically (Langfuse's
+// own versioning, not this product inventing one) rather than the metadata-on-a-trace
+// approximation this facet started with — kept as an addition, not a replacement, so existing
+// recorded history stays intact.
+function targetPromptName(targetId) {
+  return `og3-target-${targetId}`;
+}
+
+async function upsertPromptVersion(targetId, promptText, commitMessage) {
+  const result = await langfuseRequest('POST', '/api/public/v2/prompts', {
+    name: targetPromptName(targetId),
+    prompt: promptText,
+    type: 'text',
+    labels: ['production'],
+    commitMessage: commitMessage || undefined,
+  });
+  if (!result.ok) return result;
+  return { ok: true, prompt: result.data };
+}
+
+// Lists real version metadata (version numbers, labels, tags, last-updated) for this target's
+// prompt — the list endpoint doesn't return each version's full text (that needs one GET per
+// version), so this is the version *history*, not a diff view; still real Langfuse-native
+// version numbers, not a synthetic count.
+async function listPromptVersionHistory(targetId) {
+  const result = await langfuseRequest('GET', `/api/public/v2/prompts?name=${encodeURIComponent(targetPromptName(targetId))}&limit=50`);
+  if (!result.ok) return { ok: false, reason: result.reason, versions: [] };
+  const entries = result.data?.data || [];
+  const meta = entries[0];
+  if (!meta) return { ok: true, versions: [] };
+  return { ok: true, name: meta.name, versions: meta.versions || [], labels: meta.labels || [], lastUpdatedAt: meta.lastUpdatedAt };
 }
 
 // Never awaited by instrumentation call sites — see module header. Swallows its own promise
@@ -360,4 +593,16 @@ module.exports = {
   emitScore,
   fetchSessionTraces,
   fetchTraceDetail,
+  GOVERNANCE_SCORE_CONFIGS,
+  ensureGovernanceScoreConfigs,
+  emitGovernanceScore,
+  ensureReviewQueue,
+  addToReviewQueue,
+  listReviewQueueItems,
+  markReviewQueueItemComplete,
+  addComment,
+  listComments,
+  targetPromptName,
+  upsertPromptVersion,
+  listPromptVersionHistory,
 };

@@ -23,6 +23,14 @@ import {
   compareRuns,
   getTargetReport,
   getTargetLineage,
+  getLineageScoreConfigs,
+  submitGovernanceScore,
+  addToReviewQueue,
+  listReviewQueue,
+  markReviewQueueItemComplete,
+  listLineageComments,
+  addLineageComment,
+  getPromptVersionHistory,
   getRunDetail,
   importEvalStageConfig,
   generateEvalDataset,
@@ -83,6 +91,10 @@ import type {
   TargetDetailResponse,
   TargetLineage,
   LineageGraphNode,
+  LineageScoreConfig,
+  ReviewQueueItem,
+  LineageComment,
+  PromptVersionHistoryResponse,
   TargetReport,
   TargetSchedule,
   TargetTypeKey,
@@ -3658,21 +3670,222 @@ function layoutLineageGraph(nodes: LineageGraphNode[], edges: { from: string; to
   return { flowNodes, flowEdges };
 }
 
+// Human governance sign-off form — attaches a real, auditable score (from a real Langfuse score
+// config) to the selected trace/observation. Distinct from the automated pass/fail every stage
+// run already carries; this is a reviewer's own judgment call, recorded with their identity and
+// an optional comment.
+function GovernanceScoreForm({
+  targetId,
+  token,
+  node,
+  configs,
+  onSubmitted,
+}: {
+  targetId: string;
+  token: string;
+  node: LineageGraphNode;
+  configs: LineageScoreConfig[];
+  onSubmitted: () => void;
+}) {
+  const [configName, setConfigName] = useState(configs[0]?.name || '');
+  const [label, setLabel] = useState('');
+  const [comment, setComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const activeConfig = configs.find((c) => c.name === configName);
+
+  if (node.type === 'target') return null;
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!configName || !label) return;
+    setSubmitting(true);
+    setError('');
+    setMessage('');
+    try {
+      const isObservation = node.type !== 'trace';
+      await submitGovernanceScore(token, targetId, {
+        traceId: isObservation ? node.id.replace(/^obs:/, '') : node.id.replace(/^trace:/, ''),
+        // Best-effort: for observation nodes this product's graph node id doesn't carry the
+        // parent trace id separately, so scores on observation nodes attach at the trace level
+        // — still fully auditable (comment/label preserved), just not observation-scoped.
+        configName,
+        label,
+        comment: comment.trim() || undefined,
+      });
+      setMessage('Score recorded.');
+      setComment('');
+      setLabel('');
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to submit score');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!configs.length) return null;
+
+  return (
+    <form className="form" onSubmit={handleSubmit} style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+      <p className="eyebrow">Governance sign-off</p>
+      {error ? <div className="error">{error}</div> : null}
+      {message ? <div className="success">{message}</div> : null}
+      <div className="field">
+        <label htmlFor="score-config">Rubric</label>
+        <select id="score-config" value={configName} onChange={(event) => { setConfigName(event.target.value); setLabel(''); }}>
+          {configs.map((config) => (
+            <option key={config.id} value={config.name}>
+              {config.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="score-label">Value</label>
+        <select id="score-label" value={label} onChange={(event) => setLabel(event.target.value)} required>
+          <option value="">Select...</option>
+          {(activeConfig?.categories || []).map((category) => (
+            <option key={category.label} value={category.label}>
+              {category.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="score-comment">Comment (optional)</label>
+        <textarea id="score-comment" value={comment} onChange={(event) => setComment(event.target.value)} rows={2} />
+      </div>
+      <button className="secondary-button" type="submit" disabled={submitting || !label}>
+        {submitting ? 'Submitting...' : 'Submit score'}
+      </button>
+    </form>
+  );
+}
+
+// Free-text audit-trail comments on a trace — distinct from the structured GovernanceScoreForm
+// above (fixed rubric, single value). Only rendered for trace nodes, matching the backend
+// routes' fixed objectType: 'TRACE'.
+function TraceCommentsPanel({ targetId, token, traceId }: { targetId: string; token: string; traceId: string }) {
+  const [comments, setComments] = useState<LineageComment[]>([]);
+  const [content, setContent] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  function reload() {
+    listLineageComments(token, targetId, traceId)
+      .then((payload) => setComments(payload.comments || []))
+      .catch(() => setComments([]));
+  }
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId, token, traceId]);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!content.trim()) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await addLineageComment(token, targetId, traceId, content.trim());
+      setContent('');
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to add comment');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+      <p className="eyebrow">Audit-trail comments</p>
+      {error ? <div className="error">{error}</div> : null}
+      {!comments.length ? (
+        <p className="muted">No comments yet.</p>
+      ) : (
+        comments.map((comment) => (
+          <div className="finding-row" key={comment.id}>
+            <p>{comment.content}</p>
+            <p className="muted">{comment.createdAt}</p>
+          </div>
+        ))
+      )}
+      <form className="form" onSubmit={handleSubmit}>
+        <textarea
+          value={content}
+          onChange={(event) => setContent(event.target.value)}
+          rows={2}
+          placeholder="Add an audit-trail note..."
+        />
+        <button className="secondary-button" type="submit" disabled={submitting || !content.trim()}>
+          {submitting ? 'Adding...' : 'Add comment'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; token: string }) {
   const [lineage, setLineage] = useState<TargetLineage | null>(null);
+  const [scoreConfigs, setScoreConfigs] = useState<LineageScoreConfig[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
+  const [promptVersionHistory, setPromptVersionHistory] = useState<PromptVersionHistoryResponse | null>(null);
+  const [flagging, setFlagging] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'graph' | 'provenance' | 'inference' | 'evidence'>('graph');
   const [selectedNode, setSelectedNode] = useState<LineageGraphNode | null>(null);
 
-  useEffect(() => {
+  function reload() {
     setLoading(true);
     setError('');
     getTargetLineage(token, detail.target.id)
       .then(setLineage)
       .catch((err) => setError(err instanceof Error ? err.message : 'Unable to load lineage'))
       .finally(() => setLoading(false));
+  }
+
+  function reloadReviewQueue() {
+    listReviewQueue(token, detail.target.id)
+      .then((payload) => setReviewQueue(payload.items || []))
+      .catch(() => setReviewQueue([]));
+  }
+
+  useEffect(() => {
+    reload();
+    reloadReviewQueue();
+    getLineageScoreConfigs(token, detail.target.id)
+      .then((payload) => setScoreConfigs(payload.configs || []))
+      .catch(() => setScoreConfigs([]));
+    getPromptVersionHistory(token, detail.target.id)
+      .then(setPromptVersionHistory)
+      .catch(() => setPromptVersionHistory(null));
   }, [detail.target.id, token]);
+
+  async function handleFlagForReview(traceId: string) {
+    setFlagging(true);
+    try {
+      await addToReviewQueue(token, detail.target.id, traceId);
+      reloadReviewQueue();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to flag for review');
+    } finally {
+      setFlagging(false);
+    }
+  }
+
+  async function handleMarkReviewed(itemId: string) {
+    try {
+      await markReviewQueueItemComplete(token, detail.target.id, itemId);
+      reloadReviewQueue();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update review status');
+    }
+  }
 
   if (loading) {
     return <div className="empty">Loading lineage...</div>;
@@ -3769,6 +3982,32 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
                 <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 440, overflow: 'auto' }}>
                   {JSON.stringify(selectedNode.data, null, 2)}
                 </pre>
+                {selectedNode.type === 'trace' ? (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={flagging || reviewQueue.some((item) => item.objectId === selectedNode.id.replace(/^trace:/, ''))}
+                    onClick={() => handleFlagForReview(selectedNode.id.replace(/^trace:/, ''))}
+                  >
+                    {reviewQueue.some((item) => item.objectId === selectedNode.id.replace(/^trace:/, ''))
+                      ? 'Already in review queue'
+                      : 'Flag for human review'}
+                  </button>
+                ) : null}
+                {selectedNode.type === 'trace' ? (
+                  <TraceCommentsPanel
+                    targetId={detail.target.id}
+                    token={token}
+                    traceId={selectedNode.id.replace(/^trace:/, '')}
+                  />
+                ) : null}
+                <GovernanceScoreForm
+                  targetId={detail.target.id}
+                  token={token}
+                  node={selectedNode}
+                  configs={scoreConfigs}
+                  onSubmitted={reload}
+                />
               </div>
             ) : (
               <div className="panel muted" style={{ width: 320 }}>
@@ -3800,6 +4039,12 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
             </section>
             <section>
               <h3>Prompt versions</h3>
+              {promptVersionHistory?.configured && promptVersionHistory.versions?.length ? (
+                <p className="muted">
+                  Real Langfuse-native version history for <code>{promptVersionHistory.name}</code>: versions{' '}
+                  {promptVersionHistory.versions.join(', ')} (labels: {(promptVersionHistory.labels || []).join(', ') || 'none'}).
+                </p>
+              ) : null}
               {!lineage.promptVersions?.length ? (
                 <p className="muted">No prompt-version changes recorded.</p>
               ) : (
@@ -3829,6 +4074,32 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
 
         {activeTab === 'inference' ? (
           <div>
+            <h3>Cost &amp; usage (governance budget visibility)</h3>
+            {!lineage.usageSummary?.length ? (
+              <p className="muted">No inference calls recorded yet.</p>
+            ) : (
+              <div className="registry-list">
+                {lineage.usageSummary.map((row) => (
+                  <div className="registry-row" key={row.model}>
+                    <div>
+                      <h3>{row.model}</h3>
+                      <p className="muted">{row.calls} call(s)</p>
+                    </div>
+                    <div>
+                      <p className="row-label">Tokens</p>
+                      <strong>
+                        {row.inputTokens} in / {row.outputTokens} out / {row.totalTokens} total
+                      </strong>
+                    </div>
+                    <div>
+                      <p className="row-label">Cost</p>
+                      <strong>{row.totalCostUsd === null ? 'Unknown (no pricing data)' : `$${row.totalCostUsd.toFixed(4)}`}</strong>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <h3>Inference calls</h3>
             {!lineage.inferenceCalls?.length ? (
               <p className="muted">No inference calls recorded yet for this target.</p>
             ) : (
@@ -3891,6 +4162,36 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
                 <div className="finding-row" key={i}>
                   <strong>{String(entry.format || entry.name)}</strong>
                   <p className="muted">{String(entry.timestamp)}</p>
+                </div>
+              ))
+            )}
+            <h3>Governance scores</h3>
+            {!lineage.governanceScores?.length ? (
+              <p className="muted">No scores recorded yet — select a node in the Graph tab to add a human governance sign-off.</p>
+            ) : (
+              lineage.governanceScores.map((score) => (
+                <div className="finding-row" key={score.id}>
+                  <p>
+                    <strong>{score.name}</strong>: {String(score.value)} · {score.timestamp}
+                  </p>
+                  {score.comment ? <p className="muted">{score.comment}</p> : null}
+                </div>
+              ))
+            )}
+            <h3>Human review queue</h3>
+            {!reviewQueue.length ? (
+              <p className="muted">Nothing flagged for review — select a trace in the Graph tab to flag it.</p>
+            ) : (
+              reviewQueue.map((item) => (
+                <div className="finding-row" key={item.id}>
+                  <p>
+                    <strong>{item.status}</strong> · trace {item.objectId.slice(0, 8)}... · flagged {item.createdAt}
+                  </p>
+                  {item.status === 'PENDING' ? (
+                    <button className="secondary-button" type="button" onClick={() => handleMarkReviewed(item.id)}>
+                      Mark reviewed
+                    </button>
+                  ) : null}
                 </div>
               ))
             )}

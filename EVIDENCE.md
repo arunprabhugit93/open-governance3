@@ -1174,3 +1174,124 @@ queryable via this product's own API, rendered in this product's own UI,
 exported in all 5 formats, and proven live end to end against real Model,
 RAG, and Agent targets with two genuine infrastructure bugs found and
 fixed along the way.
+
+## 17. Lineage — governance features (score configs, annotation queues, comments, cost/usage, real prompt versions)
+
+**Scope**: extended §16's lineage capability with five more Langfuse
+surfaces selected specifically for governance/security value — not a
+blanket "adopt everything" pass. Deliberately left out: Langfuse's
+evaluation harness, prompt-authoring UI, playground, and dashboards (this
+product already has its own), and organizations/projects/LLM-connections/
+SCIM (duplicates this product's own tenant/provider/user model). Each of
+the five below was implemented, then live-verified against the same
+self-hosted Ollama-backed target from §16 before moving to the next —
+one at a time, per the explicit instruction for this pass.
+
+**1. Score Configs + Scores — structured governance scoring.**
+`lineage.cjs`'s `ensureGovernanceScoreConfigs()` idempotently creates two
+real Langfuse score configs on first use: `compliance-review`
+(Approved/Rejected/Needs More Review) and `risk-rating` (Low/Medium/High)
+— genuine categorical rubrics, not free text, distinct from the automated
+pass/fail every stage run already carries via `AssuranceEvidence`.
+`GET /api/targets/:id/lineage/score-configs` (list, auto-creates) and
+`POST /api/targets/:id/lineage/scores` (submit) back a new
+`GovernanceScoreForm` in the Lineage tab's node side panel. Caught and
+fixed a real bug before it shipped: `commons.yml`'s `CreateScoreValue`
+docs state categorical scores take the string **label**, not the
+config's numeric value — the first draft sent the number.
+`authorUserId` isn't a settable input field on `/scores` (only on
+annotation-queue-created scores), so the reviewer's identity is folded
+into the comment (`[reviewer: <user id>] ...`) instead of silently lost.
+Live-verified: submitted `compliance-review: Approved` against the real
+eval-run trace from §16
+(`traceId f4197f6b-6472-471e-a72c-b869063db345`), confirmed it appears
+in the lineage query (`governanceScores[]`, correct reviewer id and
+label) and in the Markdown export's new `### Governance scores` table,
+alongside the pre-existing automated `pass-rate` score.
+
+**2. Annotation Queues — human review sign-off workflow.**
+`ensureReviewQueue()` idempotently creates a shared `governance-review`
+annotation queue linked to the same two score configs. New routes:
+`POST .../lineage/review-queue` (flag a trace, real
+`AnnotationQueueObjectType: TRACE` item, status `PENDING`),
+`GET .../lineage/review-queue` (list, filtered to this target's own
+trace ids — the queue itself is project-scoped, same convention as
+sessions/traces), `PATCH .../lineage/review-queue/:itemId` (mark
+`COMPLETED`). UI: a "Flag for human review" button on trace nodes plus a
+review-queue list in the Evidence tab. Live-verified the full state
+transition: flagged the same trace (`item.status: "PENDING"`), confirmed
+it appeared in the target-filtered list, then `PATCH`'d it to
+`COMPLETED` and got back a real `completedAt` timestamp.
+
+**3. Comments — audit-trail collaboration.**
+`addComment`/`listComments` wrap Langfuse's `/comments` API. Unlike
+scores, `authorUserId` **is** a real settable field here, so reviewer
+identity is genuinely recorded without a text-prefix workaround. New
+`TraceCommentsPanel` in the trace-node side panel. Live-verified: posted
+"Escalated for review — see governance ticket #4521." against the same
+trace, then confirmed `GET` returned it with the correct
+`authorUserId: "d76a1a77-fbe5-4616-bf2d-38841f6502a3"` (the real admin
+user id) and unmodified content.
+
+**4. Cost & usage tracking — governance budget visibility.**
+Rather than adopting Langfuse's separate `/metrics` query-DSL API,
+aggregated directly from the `usageDetails`/`costDetails` every
+GENERATION observation already carries (§16's chokepoint) — simpler and
+already proven reliable. `buildLineageGraph` now returns `usageSummary`:
+per-model call count, input/output/total tokens, and `totalCostUsd`
+(real dollar figure only when Langfuse's models catalog has a matching
+price entry for that model; `null` — not a guessed number — for a
+custom/self-hosted model Langfuse has no pricing data for). New "Cost &
+usage" panel at the top of the Lineage tab's Inference tab, plus
+Markdown/HTML/CSV export rows. Live-verified against the real
+`qwen2.5:1.5b-instruct` GENERATION from §16:
+`{model: "qwen2.5:1.5b-instruct", calls: 1, inputTokens: 26,
+outputTokens: 2, totalTokens: 28, totalCostUsd: null}` — the token
+counts match §16's original live-verified GENERATION exactly, and cost
+is honestly `null` (Langfuse has no price entry for this self-hosted
+model), not fabricated. Caught and fixed a real bug: the first version
+leaked an internal `costKnown` boolean into the API response via object
+spread — destructured it out before shipping.
+
+**5. Prompt Version backing store — real Langfuse Prompt objects.**
+The original §16 `PromptVersion` facet only recorded the prompt text in
+trace metadata (a description of a change, not a real versioned object).
+This adds real Langfuse-native versioning per the original task's
+explicit allowance ("use Langfuse's prompt versioning as backing
+storage... do not surface Langfuse's authoring UI"): `upsertPromptVersion()`
+POSTs to `/api/public/v2/prompts` with a stable per-target name
+(`og3-target-<id>`) — Langfuse auto-increments the version on every POST
+to the same name, this product invents no version-numbering scheme of
+its own. Wired additively into the existing eval-config PATCH route
+(fire-and-forget, never blocks the response), alongside — not replacing —
+the existing trace-metadata record. New
+`GET /api/targets/:id/lineage/prompt-versions` and a real-version-history
+line in the Lineage tab's Provenance tab. Live-verified: PATCHed the
+eval promptTemplate twice in a row and confirmed real, incrementing
+Langfuse version numbers came back —
+`{name: "og3-target-4687a594-...", versions: [1], labels: ["latest",
+"production"]}` after the first change, `versions: [1, 2]` after the
+second — genuine Langfuse-assigned version numbers, not a count this
+product computed itself.
+
+**What this does NOT claim**: prompt-version diffing (full text per
+version, not just version numbers) is not surfaced — the list endpoint
+returns version metadata only; fetching full text per version would need
+one additional call per version, left for a future pass if the version
+count grows large enough to need it. GENERATION observations are not yet
+linked to a specific prompt version id (would need threading
+promptName/promptVersion through the `AsyncLocalStorage` context established
+in §16) — real version history exists and is queryable, but "which
+inference call used which exact prompt version" isn't cross-referenced
+yet. Cost tracking is honest about being `null` for unpriced models — this
+was not tested against a target using a Langfuse-priced model (e.g. a
+real OpenAI/Anthropic target), so the non-null cost path is verified by
+code review against Langfuse's own documented `costDetails` field, not an
+additional live run with real billing data.
+
+Result: **Pass** — five more governance-relevant Langfuse surfaces
+integrated, each live-verified one at a time against the same real
+self-hosted target before moving to the next, per the explicit
+instruction for this pass. Two real bugs caught and fixed before
+shipping (categorical score value format, a leaked internal field) —
+found via live testing, not by code review alone.
