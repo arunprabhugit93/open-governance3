@@ -958,7 +958,7 @@ function buildMarkdownReport(report) {
     } else {
       lines.push('| Model | Calls | Input tokens | Output tokens | Total tokens | Cost (USD) |', '| --- | ---: | ---: | ---: | ---: | ---: |');
       for (const row of lineageSection.usageSummary) {
-        lines.push(`| ${markdownEscape(row.model)} | ${row.calls} | ${row.inputTokens} | ${row.outputTokens} | ${row.totalTokens} | ${row.totalCostUsd === null ? 'unknown (no pricing data for this model)' : `$${row.totalCostUsd.toFixed(4)}`} |`);
+        lines.push(`| ${markdownEscape(row.model)} | ${row.calls} | ${row.inputTokens} | ${row.outputTokens} | ${row.totalTokens} | ${row.totalCostUsd === null ? 'unknown (no pricing data for this model)' : `$${row.totalCostUsd.toFixed(6)}`} |`);
       }
     }
   }
@@ -1022,7 +1022,7 @@ function buildLineageHtmlSection(lineageSection) {
         <td>${row.inputTokens}</td>
         <td>${row.outputTokens}</td>
         <td>${row.totalTokens}</td>
-        <td>${row.totalCostUsd === null ? 'unknown (no pricing data)' : `$${row.totalCostUsd.toFixed(4)}`}</td>
+        <td>${row.totalCostUsd === null ? 'unknown (no pricing data)' : `$${row.totalCostUsd.toFixed(6)}`}</td>
       </tr>`,
             )
             .join('')}</tbody></table>`
@@ -6649,7 +6649,7 @@ function lineageCsvBlock(lineageSection) {
   rows.push([]);
   rows.push(['Model', 'Calls', 'Input tokens', 'Output tokens', 'Total tokens', 'Cost (USD)']);
   for (const row of lineageSection.usageSummary || []) {
-    rows.push([row.model, row.calls, row.inputTokens, row.outputTokens, row.totalTokens, row.totalCostUsd === null ? 'unknown' : row.totalCostUsd.toFixed(4)]);
+    rows.push([row.model, row.calls, row.inputTokens, row.outputTokens, row.totalTokens, row.totalCostUsd === null ? 'unknown' : row.totalCostUsd.toFixed(6)]);
   }
   return rows.map((row) => row.map(csvCell).join(',')).join('\n');
 }
@@ -8889,9 +8889,18 @@ async function buildLineageGraph(target) {
       bucket.costKnown = true;
     }
   }
+  // Cost source labeling — Langfuse computes costDetails at ingestion time from whichever model
+  // price definition matched at that moment, so registering a price via registerModelCostEstimate
+  // only affects observations ingested AFTER that point, not retroactively (an honest
+  // characteristic of the underlying system, not something this product papers over — see
+  // PROVENANCE.md/EVIDENCE.md). isLangfuseManaged distinguishes Langfuse's own built-in vendor
+  // catalog from an operator-registered estimate.
+  const modelPriceLookup = lineage.isLineageConfigured() ? await lineage.listModelCostEstimates() : { ok: false, models: [] };
+  const managedByModelName = new Map((modelPriceLookup.models || []).map((m) => [m.modelName, m.isLangfuseManaged]));
   const usageSummary = Array.from(usageByModel.values()).map(({ costKnown, ...bucket }) => ({
     ...bucket,
     totalCostUsd: costKnown ? bucket.totalCostUsd : null,
+    costSource: !costKnown ? null : managedByModelName.get(bucket.model) === false ? 'operator-estimated' : 'vendor',
   }));
 
   return {
@@ -9065,6 +9074,40 @@ app.get('/api/targets/:id/lineage/prompt-versions', requireAuth, async (req, res
     return res.json({ configured: true, available: false, reason: result.reason, versions: [] });
   }
   res.json({ configured: true, available: true, name: result.name, versions: result.versions, labels: result.labels, lastUpdatedAt: result.lastUpdatedAt });
+});
+
+// Operator-estimated cost registration for a self-hosted model with no vendor pricing data —
+// closes the honest `totalCostUsd: null` gap the cost/usage summary above surfaces. Project-
+// scoped in Langfuse (like score configs), exposed at the target level here purely for UI
+// convenience — the price applies to every target using that model name, not just this one.
+app.get('/api/targets/:id/lineage/model-price', requireAuth, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.json({ configured: false, models: [] });
+  }
+  const result = await lineage.listModelCostEstimates();
+  if (!result.ok) {
+    return res.json({ configured: true, available: false, reason: result.reason, models: [] });
+  }
+  res.json({ configured: true, available: true, models: result.models });
+});
+
+app.post('/api/targets/:id/lineage/model-price', requireAuth, requireAdmin, async (req, res) => {
+  if (!lineage.isLineageConfigured()) {
+    return res.status(400).json({ error: 'Lineage capability is not configured for this deployment' });
+  }
+  const { modelName, inputPricePerToken, outputPricePerToken } = req.body || {};
+  const result = await lineage.registerModelCostEstimate({
+    modelName,
+    inputPricePerToken: inputPricePerToken !== undefined ? Number(inputPricePerToken) : undefined,
+    outputPricePerToken: outputPricePerToken !== undefined ? Number(outputPricePerToken) : undefined,
+  });
+  if (!result.ok) {
+    return res.status(400).json({ error: result.reason });
+  }
+  res.status(201).json({
+    model: result.model,
+    note: 'Applies only to observations ingested after this point — Langfuse computes cost at ingestion time, not retroactively.',
+  });
 });
 
 app.post('/api/targets', requireAuth, requireAdmin, async (req, res) => {

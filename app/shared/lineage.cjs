@@ -366,6 +366,55 @@ async function listPromptVersionHistory(targetId) {
   return { ok: true, name: meta.name, versions: meta.versions || [], labels: meta.labels || [], lastUpdatedAt: meta.lastUpdatedAt };
 }
 
+// Closes an honest gap surfaced by the cost/usage facet: a self-hosted model (Ollama, vLLM, ...)
+// has no vendor-published $ price, so aggregated cost reads `null` — correct, not a bug, but not
+// actionable for real budget governance either. This lets an operator register their OWN cost
+// estimate (e.g. amortized compute/hosting cost per token) via Langfuse's real Models API
+// (matchPattern regex against generation.model, real pricing-tier mechanism — this product
+// invents no pricing engine of its own). Always labeled operator-estimated, never presented as
+// vendor-verified pricing — same attestation discipline as TrainingProvenance.
+async function registerModelCostEstimate({ modelName, inputPricePerToken, outputPricePerToken }) {
+  if (!modelName) return { ok: false, reason: 'modelName is required' };
+  const hasInput = Number.isFinite(inputPricePerToken);
+  const hasOutput = Number.isFinite(outputPricePerToken);
+  if (!hasInput && !hasOutput) return { ok: false, reason: 'at least one of inputPricePerToken/outputPricePerToken is required' };
+  // Exact-match regex (not a loose substring) so this never accidentally re-prices an unrelated
+  // model whose name happens to contain this one as a substring.
+  const matchPattern = `(?i)^${modelName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
+  const result = await langfuseRequest('POST', '/api/public/models', {
+    modelName,
+    matchPattern,
+    unit: 'TOKENS',
+    ...(hasInput ? { inputPrice: inputPricePerToken } : {}),
+    ...(hasOutput ? { outputPrice: outputPricePerToken } : {}),
+  });
+  if (!result.ok) return result;
+  modelCostCache = null;
+  return { ok: true, model: result.data };
+}
+
+let modelCostCache = null;
+
+// Langfuse's built-in vendor model catalog is large (175+ entries as of this writing) and the
+// list endpoint caps `limit` at 100 (verified live — `limit=1000` is rejected with a 400), so a
+// single page silently missed any custom entry sorted past page 1. Paginates through every page
+// (capped at 20 as a sanity bound, not because 20 is expected) and caches for the process
+// lifetime — invalidated by registerModelCostEstimate() below so a newly-set price is visible
+// immediately, not just after a restart.
+async function listModelCostEstimates() {
+  if (modelCostCache) return modelCostCache;
+  const models = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const result = await langfuseRequest('GET', `/api/public/models?limit=100&page=${page}`);
+    if (!result.ok) return { ok: false, reason: result.reason, models: [] };
+    const data = result.data?.data || [];
+    models.push(...data);
+    if (page >= (result.data?.meta?.totalPages || 1)) break;
+  }
+  modelCostCache = { ok: true, models };
+  return modelCostCache;
+}
+
 // Never awaited by instrumentation call sites — see module header. Swallows its own promise
 // rejection (postIngestionBatch already never throws, this is defense in depth).
 function fireAndForget(events) {
@@ -605,4 +654,6 @@ module.exports = {
   targetPromptName,
   upsertPromptVersion,
   listPromptVersionHistory,
+  registerModelCostEstimate,
+  listModelCostEstimates,
 };

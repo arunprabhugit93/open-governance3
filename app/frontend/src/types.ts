@@ -390,6 +390,7 @@ export interface TargetLineage {
     outputTokens: number;
     totalTokens: number;
     totalCostUsd: number | null;
+    costSource: 'vendor' | 'operator-estimated' | null;
   }>;
 }
 

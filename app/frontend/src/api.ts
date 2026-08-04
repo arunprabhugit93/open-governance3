@@ -585,6 +585,17 @@ export function getPromptVersionHistory(token: string, id: string): Promise<Prom
   return request<PromptVersionHistoryResponse>(`/api/targets/${id}/lineage/prompt-versions`, token);
 }
 
+export function registerModelCostEstimate(
+  token: string,
+  id: string,
+  payload: { modelName: string; inputPricePerToken?: number; outputPricePerToken?: number },
+): Promise<{ model: unknown; note: string }> {
+  return request<{ model: unknown; note: string }>(`/api/targets/${id}/lineage/model-price`, token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function compareRuns(
   token: string,
   id: string,

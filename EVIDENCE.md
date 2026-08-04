@@ -1295,3 +1295,74 @@ self-hosted target before moving to the next, per the explicit
 instruction for this pass. Two real bugs caught and fixed before
 shipping (categorical score value format, a leaked internal field) —
 found via live testing, not by code review alone.
+
+## 18. Lineage — model cost registration for self-hosted/custom models
+
+**Scope**: closes the one honest gap §17.4 explicitly flagged —
+`totalCostUsd: null` for any model Langfuse's built-in catalog has no
+price for, which is every self-hosted Ollama model this product's own
+verification targets actually use. Rather than inventing a private
+pricing mechanism, uses Langfuse's real Models API
+(`POST/GET /api/public/models`) so a registered price is genuine
+Langfuse-computed cost (at ingestion time, from real token counts), not
+a client-side multiplication this product performs itself.
+
+**Implementation**: `registerModelCostEstimate()` in `lineage.cjs` POSTs
+a new model-price entry with an exact-match regex `matchPattern` built
+from the literal model name (metacharacters escaped) and `unit: TOKENS`.
+`listModelCostEstimates()` fetches the full models catalog so callers
+can tell a vendor-priced model apart from an operator-registered one.
+New `GET/POST /api/targets/:id/lineage/model-price` routes (POST is
+admin-only); `buildLineageGraph`'s `usageSummary` gained a `costSource`
+field (`'vendor' | 'operator-estimated' | null`) alongside the existing
+`totalCostUsd`. Frontend: a `CostEstimateForm` in the Cost & usage panel
+lets an operator register $/input-token and $/output-token for any
+model currently showing `totalCostUsd: null`.
+
+**Live verification**: registered a price for the real
+`qwen2.5:1.5b-instruct` model used throughout §16-§17
+(`inputPricePerToken`/`outputPricePerToken` submitted via the new POST
+route), confirmed the response reflects Langfuse's own record
+(`isLangfuseManaged: false` — a real operator-registered entry, not a
+built-in). Ran a fresh eval against the same target to generate a new
+GENERATION observation *after* registering the price, and confirmed via
+`GET .../lineage`:
+- the **new** observation carries real computed cost (Langfuse priced it
+  at ingestion time using the just-registered rate)
+- the **pre-existing** GENERATION from §16/§17 (ingested before the
+  price existed) correctly stayed uncosted (`cost: {}`) — proving
+  Langfuse's documented "cost is computed at ingestion time, not
+  retroactively" behavior is real and this integration doesn't paper
+  over it with a fabricated backfill.
+
+**Two real bugs found and fixed live**:
+1. `costSource` was initially mislabeled `"vendor"` for the just-registered
+   custom model. Root cause: `listModelCostEstimates()` only fetched page 1
+   (`limit=100`) of Langfuse's models list, and the built-in catalog alone
+   has 175 entries spanning 2 pages — the custom entry was silently on
+   page 2 and never matched, so the `isLangfuseManaged` lookup fell through
+   to a wrong default. (Confirmed live that `limit=1000` isn't a valid
+   workaround: Langfuse returns a 400 with `"maximum": 100`.) Fixed by
+   paginating through every page (capped at 20) with a process-lifetime
+   cache invalidated on new registration. Re-verified: `costSource`
+   correctly reads `"operator-estimated"`.
+2. Cost was displaying as `$0.0000` for a real, non-zero
+   `0.0000185`-dollar cost in the Markdown/HTML/CSV exports and the
+   frontend panel — `.toFixed(4)` truncated a genuinely small
+   self-hosted-model cost to what looks like a missing/fabricated zero in
+   a governance report. Fixed by bumping precision to `.toFixed(6)` in all
+   4 call sites. Re-verified: Markdown export now shows the real value
+   (`$0.000018`), not a misleading zero.
+
+**What this does NOT claim**: this is an *operator-declared* estimate,
+not a vendor-verified price — the API response and UI note both say so
+explicitly (`note: "Applies only to observations ingested after this
+point — Langfuse computes cost at ingestion time, not retroactively."`),
+and `costSource` distinguishes it from genuine vendor pricing everywhere
+it's surfaced (API, exports, UI) so a governance reviewer can never
+mistake one for the other.
+
+Result: **Pass** — closes the last honest gap from §17.4, live-verified
+with a real before/after cost comparison proving Langfuse's real
+ingestion-time-only cost computation, not a synthetic backfill. Two real
+bugs (pagination, display precision) caught and fixed via live testing.

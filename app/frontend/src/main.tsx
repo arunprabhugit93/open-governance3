@@ -31,6 +31,7 @@ import {
   listLineageComments,
   addLineageComment,
   getPromptVersionHistory,
+  registerModelCostEstimate,
   getRunDetail,
   importEvalStageConfig,
   generateEvalDataset,
@@ -3829,6 +3830,56 @@ function TraceCommentsPanel({ targetId, token, traceId }: { targetId: string; to
   );
 }
 
+// Lets an operator register their own cost estimate for a self-hosted model Langfuse has no
+// vendor pricing for — always clearly labeled operator-estimated (never presented as vendor
+// pricing) and honestly noted as applying only to future inference calls, not retroactively.
+function CostEstimateForm({ targetId, token, modelName, onSubmitted }: { targetId: string; token: string; modelName: string; onSubmitted: () => void }) {
+  const [inputPrice, setInputPrice] = useState('');
+  const [outputPrice, setOutputPrice] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!inputPrice && !outputPrice) return;
+    setSubmitting(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await registerModelCostEstimate(token, targetId, {
+        modelName,
+        inputPricePerToken: inputPrice ? Number(inputPrice) : undefined,
+        outputPricePerToken: outputPrice ? Number(outputPrice) : undefined,
+      });
+      setMessage(result.note);
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to register cost estimate');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form className="form" onSubmit={handleSubmit} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+      {error ? <div className="error">{error}</div> : null}
+      {message ? <div className="success">{message}</div> : null}
+      <div className="field">
+        <label>$/input token</label>
+        <input type="number" step="0.000001" min="0" value={inputPrice} onChange={(event) => setInputPrice(event.target.value)} placeholder="0.000000" />
+      </div>
+      <div className="field">
+        <label>$/output token</label>
+        <input type="number" step="0.000001" min="0" value={outputPrice} onChange={(event) => setOutputPrice(event.target.value)} placeholder="0.000000" />
+      </div>
+      <button className="secondary-button" type="submit" disabled={submitting || (!inputPrice && !outputPrice)}>
+        {submitting ? 'Saving...' : 'Set cost estimate'}
+      </button>
+    </form>
+  );
+}
+
 function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; token: string }) {
   const [lineage, setLineage] = useState<TargetLineage | null>(null);
   const [scoreConfigs, setScoreConfigs] = useState<LineageScoreConfig[]>([]);
@@ -4080,21 +4131,29 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
             ) : (
               <div className="registry-list">
                 {lineage.usageSummary.map((row) => (
-                  <div className="registry-row" key={row.model}>
-                    <div>
-                      <h3>{row.model}</h3>
-                      <p className="muted">{row.calls} call(s)</p>
+                  <div className="finding-row" key={row.model}>
+                    <div className="registry-row" style={{ border: 'none', padding: 0 }}>
+                      <div>
+                        <h3>{row.model}</h3>
+                        <p className="muted">{row.calls} call(s)</p>
+                      </div>
+                      <div>
+                        <p className="row-label">Tokens</p>
+                        <strong>
+                          {row.inputTokens} in / {row.outputTokens} out / {row.totalTokens} total
+                        </strong>
+                      </div>
+                      <div>
+                        <p className="row-label">Cost</p>
+                        <strong>
+                          {row.totalCostUsd === null ? 'Unknown (no pricing data)' : `$${row.totalCostUsd.toFixed(6)}`}
+                          {row.costSource ? ` (${row.costSource})` : ''}
+                        </strong>
+                      </div>
                     </div>
-                    <div>
-                      <p className="row-label">Tokens</p>
-                      <strong>
-                        {row.inputTokens} in / {row.outputTokens} out / {row.totalTokens} total
-                      </strong>
-                    </div>
-                    <div>
-                      <p className="row-label">Cost</p>
-                      <strong>{row.totalCostUsd === null ? 'Unknown (no pricing data)' : `$${row.totalCostUsd.toFixed(4)}`}</strong>
-                    </div>
+                    {row.totalCostUsd === null ? (
+                      <CostEstimateForm targetId={detail.target.id} token={token} modelName={row.model} onSubmitted={reload} />
+                    ) : null}
                   </div>
                 ))}
               </div>
