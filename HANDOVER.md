@@ -4457,3 +4457,10 @@ this loop, not an unlimited test double.
 - **Found real signal already computed but silently discarded**: `callProviderAdapter` (the chokepoint wrapping all 11 provider bridges) never forwarded `finishReason` (already extracted per-adapter for the finish-reason assertion), `modelParameters` (temperature/maxTokens — `emitObservation` already had the field, unused), or `logProbs` (already extracted for the perplexity assertion, opt-in via `libraryConfig.requestLogprobs`) into the GENERATION observation. Now all three reach lineage, plus the full raw unparsed provider response (mirrors the existing "View raw provider response" convention already used for eval results).
 - **Live verification**: fresh eval run confirmed real values — `finishReason: "stop"`, `modelParameters: {temperature: 0, maxTokens: 400}`, full raw OpenAI-compatible response body preserved, `logProbs` honestly absent (this target never opted in) rather than fabricated.
 - **Verification**: full detail in `EVIDENCE.md` § 20.
+
+## Change log — iteration 90 (lineage: fixed unreadable Graph tab — identical node labels)
+
+- **Trigger**: a real screenshot showed the actual problem — the Graph tab (default landing view) rendered every GENERATION node with the literal same label (`provider-call:openai-compatible`) and every SPAN node with the same label (`eval run execution`), regardless of model/outcome/timestamp. A display bug, not a missing-data problem — every field needed was already on `node.data`.
+- **Fix**: `layoutLineageGraph`'s new `buildLabel()` reads type-specific real fields per node — GENERATION shows model + token count + error flag + time; SPAN shows stage key + real pass/fail count (from the existing `assuranceEvidence` facet) + time. Added a color legend and a one-line caption above the graph.
+- **Live verification**: confirmed the real node data the new labels read (`model: "qwen2.5:1.5b-instruct"`, `usage.total: 33`, `assuranceEvidence: {pass:1, total:1}`) and that they render as intended. Frontend rebuilt, server restarted, confirmed serving the new bundle.
+- **Verification**: full detail in `EVIDENCE.md` § 21.

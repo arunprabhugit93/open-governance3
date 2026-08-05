@@ -3643,14 +3643,45 @@ function layoutLineageGraph(nodes: LineageGraphNode[], edges: { from: string; to
     AGENT: '#be185d',
     TOOL: '#4d7c0f',
   };
+  const shortTime = (iso: unknown) => {
+    if (!iso) return '';
+    const d = new Date(String(iso));
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+  // Every observation already carries enough real data (model, tokens, pass/fail, timestamp) to
+  // tell same-type nodes apart at a glance — the previous version threw all of it away and used
+  // the same generic name (e.g. "provider-call:openai-compatible") for every GENERATION node,
+  // making the graph unreadable without clicking each one individually.
+  const buildLabel = (node: LineageGraphNode): string => {
+    const d = node.data || {};
+    const meta = (d.metadata || {}) as Record<string, unknown>;
+    if (node.type === 'GENERATION') {
+      const usage = (d.usage || {}) as Record<string, number>;
+      const level = String(d.level || 'DEFAULT');
+      const status = level === 'ERROR' ? ' ⚠ ERROR' : '';
+      return [String(d.model || node.label), `${usage.total ?? '?'} tokens${status}`, shortTime(d.startTime)].filter(Boolean).join('\n');
+    }
+    if (node.type === 'SPAN') {
+      const evidence = meta.assuranceEvidence as { pass?: number; fail?: number; error?: number; total?: number } | undefined;
+      const outcome = evidence ? `${evidence.pass ?? 0}/${evidence.total ?? 0} passed` : String(meta.status || 'running');
+      return [String(meta.stageKey || node.label), outcome, shortTime(d.startTime)].filter(Boolean).join('\n');
+    }
+    if (node.type === 'trace') {
+      return [node.label, shortTime(d.timestamp)].filter(Boolean).join('\n');
+    }
+    if (node.type === 'RETRIEVER' || node.type === 'TOOL' || node.type === 'AGENT') {
+      return [node.label, shortTime(d.startTime)].filter(Boolean).join('\n');
+    }
+    return node.label;
+  };
   const flowNodes: FlowNode[] = nodes.map((node) => {
     const depth = depthById.get(node.id) ?? 0;
     const yIndex = countByDepth.get(depth) || 0;
     countByDepth.set(depth, yIndex + 1);
     return {
       id: node.id,
-      position: { x: depth * 260, y: yIndex * 90 },
-      data: { label: `${node.label}` },
+      position: { x: depth * 260, y: yIndex * 110 },
+      data: { label: buildLabel(node) },
       style: {
         background: NODE_TYPE_COLOR[node.type] || '#475569',
         color: '#fff',
@@ -3658,6 +3689,8 @@ function layoutLineageGraph(nodes: LineageGraphNode[], edges: { from: string; to
         padding: 8,
         fontSize: 12,
         width: 220,
+        whiteSpace: 'pre-line',
+        lineHeight: 1.4,
       },
     };
   });
@@ -4011,7 +4044,27 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
 
         {activeTab === 'graph' ? (
           <div style={{ display: 'flex', gap: 16 }}>
-            <div style={{ height: 520, flex: 1, border: '1px solid #334155', borderRadius: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8, fontSize: 12 }}>
+                {[
+                  ['target', '#1d4ed8', 'Target'],
+                  ['trace', '#334155', 'Trace (a run/event)'],
+                  ['SPAN', '#7c3aed', 'Stage run'],
+                  ['GENERATION', '#0f766e', 'Inference call'],
+                  ['RETRIEVER', '#b45309', 'RAG retrieval'],
+                  ['TOOL', '#4d7c0f', 'Tool call'],
+                ].map(([, color, label]) => (
+                  <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: 'inline-block' }} />
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <p className="muted" style={{ marginBottom: 8 }}>
+                Click any node for its full detail. Generation nodes show model + token count + timestamp; stage-run
+                nodes show pass/fail outcome — hover isn't needed to tell nodes of the same type apart.
+              </p>
+            <div style={{ height: 520, border: '1px solid #334155', borderRadius: 8 }}>
               <ReactFlow
                 nodes={flowNodes}
                 edges={flowEdges}
@@ -4025,6 +4078,7 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
                 <Controls />
                 <MiniMap />
               </ReactFlow>
+            </div>
             </div>
             {selectedNode ? (
               <div className="panel" style={{ width: 320 }}>

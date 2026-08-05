@@ -1511,3 +1511,49 @@ confidence when opted in, full raw response), while being explicit that
 weight/attention-level interpretability is outside what any API-based
 lineage tool — including the real Langfuse — can provide, rather than
 fabricating a plausible-looking "why" that no data backs.
+
+## 21. Lineage — the Graph tab itself was unreadable (identical node labels); fixed
+
+**Scope**: a screenshot from real use showed the actual, concrete
+problem — the Graph tab (the default landing view) rendered every
+GENERATION node with the literal same label
+(`provider-call:openai-compatible`) and every SPAN node with the same
+label (`eval run execution`), regardless of which model ran, when, or
+whether it passed. The graph looked like a wall of identical boxes.
+This was a real display bug, not a data gap — every field needed to
+tell nodes apart (model name, token count, pass/fail counts, timestamp)
+was already present on `node.data`, just never read when building the
+label.
+
+**Fix** (`layoutLineageGraph` in `main.tsx`, frontend-only — no backend
+change needed since the data already existed): a new `buildLabel()`
+reads type-specific fields per node instead of using the raw
+`obs.name`/`type` string Langfuse assigns:
+- **GENERATION**: `<model name>` / `<token count> tokens (⚠ ERROR if
+  level is ERROR)` / `<HH:MM:SS>`
+- **SPAN** (stage run): `<stageKey>` / `<pass>/<total> passed` (from the
+  real `assuranceEvidence` facet already attached in § iteration 85) /
+  `<HH:MM:SS>`
+- **trace / RETRIEVER / TOOL / AGENT**: existing label + timestamp
+
+Also added a color legend above the graph (6 node types, color swatch +
+plain-English meaning) since the color coding was never explained
+anywhere in the UI, and a one-line caption stating what each node type's
+label now conveys — so a user doesn't have to click every node just to
+tell them apart.
+
+**Live verification**: queried the real target's lineage graph and
+confirmed the exact fields the new label logic reads are present and
+correct on real nodes —
+`GENERATION: {model: "qwen2.5:1.5b-instruct", usage.total: 33, level:
+"DEFAULT"}` → renders "qwen2.5:1.5b-instruct / 33 tokens / <time>";
+`SPAN: {stageKey: "eval", assuranceEvidence: {pass:1, fail:0, total:1}}`
+→ renders "eval / 1/1 passed / <time>". Confirmed clean `tsc -b --force`
+and `npm run build`, restarted the dev server (per the now-established
+"restart after every build" requirement from § 19), confirmed via curl
+that port 18080 serves the new hashed bundle.
+
+Result: **Pass** — the Graph tab's node labels are now information-dense
+and distinguishable at a glance, using only data that was already being
+computed and sent to the frontend; this was a display defect, not a
+missing-data problem.
