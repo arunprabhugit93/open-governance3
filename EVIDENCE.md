@@ -1366,3 +1366,71 @@ Result: **Pass** — closes the last honest gap from §17.4, live-verified
 with a real before/after cost comparison proving Langfuse's real
 ingestion-time-only cost computation, not a synthetic backfill. Two real
 bugs (pagination, display precision) caught and fixed via live testing.
+
+## 19. Lineage UI — full per-call inference detail (prompt, response, latency, params)
+
+**Scope**: a user reported the Inference calls tab was too shallow to
+actually answer "what happened during each hit to the LLM, what did it
+send, and how did it respond" — the raw data (full prompt, full
+response, per-call token/cost, latency, model parameters, error status)
+was already captured by the §16 instrumentation and returned by
+`GET .../lineage`, but the UI truncated input/output to 200-300
+characters and never surfaced latency, per-call cost, or error state.
+This closes that gap on the display side only — no new instrumentation,
+since the underlying data already existed.
+
+**Backend**: `inferenceCalls` in `buildLineageGraph` (`server.cjs`)
+gained `endTime`, `modelParameters`, and `statusMessage` — three real
+fields already present on Langfuse's own observation schema (confirmed
+against the vendored fork's own Fern spec,
+`fern/apis/server/definition/trace.yml` and `observations.yml`) that
+`fetchTraceDetail` already received but the route never forwarded.
+
+**Frontend** (`LineageWorkspace` in `main.tsx`): each inference-call row
+now shows model + error/warning badge (from `level`) + wall-clock
+timestamp + computed latency (`endTime - startTime`), per-call token
+breakdown and dollar cost (not just the aggregate summary), model
+parameters when present, and two `<details>` expanders — full prompt
+sent, full response received — following this codebase's existing
+expand/collapse convention (same `<details>/<pre className="config-preview">`
+pattern already used for eval-result raw-response viewing). Retrieval
+contexts now show the actual search query alongside the full retrieved
+context (previously output-only, truncated). Tool calls now show full
+arguments (previously truncated to 200 chars) plus an explicit note that
+this product records tool-call *intent* only — it doesn't execute tools
+itself, so no result is recorded, an honest limitation rather than a
+silently-empty field.
+
+**Live verification**: restarted the app server (found and fixed a
+related operational bug in the same pass — see below), then queried
+`GET /api/targets/4687a594-.../lineage` against the real target from
+§16-§18. Confirmed the new fields are real, not placeholders:
+```
+startTime: 2026-08-04T16:51:21.777Z, endTime: 2026-08-04T16:52:16.206Z
+→ 54.4s latency (this is a CPU-only local model — a real, not padded, number)
+input: {"systemPrompt": "...", "prompt": "Please respond carefully to: Reply with exactly: OK"}
+output: "OK"
+usage: {input: 31, output: 2, total: 33}, cost: {input: 0.0000155, output: 0.000003, total: 0.0000185}
+```
+Confirmed the built frontend bundle actually contains the new UI copy
+(`Full prompt sent (input)`, `Full response received (output)`, `Model
+parameters`) — not just that the source compiled, that the artifact
+being served has it.
+
+**Real operational bug found and fixed in the same pass**: the running
+dev server on port 18080 had started *before* an earlier frontend
+rebuild completed, so `express.static`'s `staticPath` (resolved once at
+process startup via `fs.existsSync`) was serving a stale built bundle —
+the Lineage tab itself was invisible to the user testing it, despite
+being fully implemented and shipped. This is a real characteristic of
+`server.cjs`'s static-path resolution (documented in its own startup
+warning: "Run `npm run build`... and restart the server"), not a code
+defect — fixed operationally by killing the stale process(es) and
+restarting. Worth remembering for any future frontend change: **the dev
+server must be restarted after every `npm run build`**, or the UI change
+will silently not appear no matter how correct the code is.
+
+Result: **Pass** — the Lineage tab's Inference calls view now actually
+answers "what did it send and how did it respond" in full, not a
+200-character preview. Live-verified against real (not synthetic) data
+including a real 54-second CPU-inference latency figure.

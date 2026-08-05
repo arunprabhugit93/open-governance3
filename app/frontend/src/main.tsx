@@ -4159,37 +4159,96 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
               </div>
             )}
             <h3>Inference calls</h3>
+            <p className="muted">Every actual LLM call: what was sent, what came back, how long it took, and what it cost.</p>
             {!lineage.inferenceCalls?.length ? (
               <p className="muted">No inference calls recorded yet for this target.</p>
             ) : (
-              lineage.inferenceCalls.map((call, i) => (
-                <div className="finding-row" key={i}>
-                  <p>
-                    <strong>{String(call.model || 'unknown model')}</strong> · {String(call.startTime)}
-                  </p>
-                  <p className="muted">Input: {JSON.stringify(call.input).slice(0, 200)}</p>
-                  <p className="muted">Output: {String(call.output ?? '').slice(0, 200)}</p>
-                </div>
-              ))
+              lineage.inferenceCalls.map((call, i) => {
+                const usage = (call.usage || {}) as Record<string, number>;
+                const cost = (call.cost || {}) as Record<string, number>;
+                const params = call.modelParameters as Record<string, unknown> | undefined;
+                const start = call.startTime ? new Date(String(call.startTime)) : null;
+                const end = call.endTime ? new Date(String(call.endTime)) : null;
+                const latencyMs = start && end ? end.getTime() - start.getTime() : null;
+                const level = String(call.level || 'DEFAULT');
+                return (
+                  <div className="finding-row" key={i}>
+                    <p>
+                      <strong>{String(call.model || 'unknown model')}</strong>
+                      {level !== 'DEFAULT' ? (
+                        <span className={level === 'ERROR' ? 'result-fail' : 'result-pass'} style={{ marginLeft: 8 }}>
+                          {level}
+                        </span>
+                      ) : null}
+                      {' · '}
+                      {start ? start.toLocaleString() : String(call.startTime || '')}
+                      {latencyMs !== null ? ` · ${latencyMs >= 1000 ? `${(latencyMs / 1000).toFixed(2)}s` : `${latencyMs}ms`}` : ''}
+                    </p>
+                    {call.statusMessage ? <p className="muted">Status: {String(call.statusMessage)}</p> : null}
+                    <p className="row-label">Tokens / cost</p>
+                    <p className="muted">
+                      {Number(usage.input || 0)} in / {Number(usage.output || 0)} out / {Number(usage.total || 0)} total
+                      {typeof cost.total === 'number' ? ` · $${cost.total.toFixed(6)}` : ' · cost unknown'}
+                    </p>
+                    {params && Object.keys(params).length ? (
+                      <details>
+                        <summary>Model parameters</summary>
+                        <pre className="config-preview">{JSON.stringify(params, null, 2)}</pre>
+                      </details>
+                    ) : null}
+                    <details>
+                      <summary>Full prompt sent (input)</summary>
+                      <pre className="config-preview">
+                        {typeof call.input === 'string' ? call.input : JSON.stringify(call.input, null, 2)}
+                      </pre>
+                    </details>
+                    <details>
+                      <summary>Full response received (output)</summary>
+                      <pre className="config-preview">
+                        {typeof call.output === 'string' ? call.output : JSON.stringify(call.output, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                );
+              })
             )}
             <h3>Retrieval contexts (RAG)</h3>
+            <p className="muted">What was searched for, and exactly what context came back to be fed into the prompt.</p>
             {!lineage.retrievalContexts?.length ? (
               <p className="muted">No retrieval-context observations recorded (either not a RAG target, or no test rows carried retrieved context).</p>
             ) : (
-              lineage.retrievalContexts.map((entry, i) => (
-                <div className="finding-row" key={i}>
-                  <p className="muted">Output: {JSON.stringify(entry.output).slice(0, 300)}</p>
-                </div>
-              ))
+              lineage.retrievalContexts.map((entry, i) => {
+                const query = (entry.input as Record<string, unknown> | undefined)?.query;
+                return (
+                  <div className="finding-row" key={i}>
+                    {query ? <p className="muted">Query: {String(query)}</p> : null}
+                    <details>
+                      <summary>Full retrieved context (fed into the prompt)</summary>
+                      <pre className="config-preview">
+                        {typeof entry.output === 'string' ? entry.output : JSON.stringify(entry.output, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                );
+              })
             )}
             <h3>Tool calls (agent)</h3>
+            <p className="muted">
+              Tools the model requested during a run. This product records the model's intent to call a tool (name +
+              arguments) for lineage purposes — it does not execute the tool itself, so no result/output is recorded here.
+            </p>
             {!lineage.toolCalls?.length ? (
               <p className="muted">No tool-call observations recorded (either not an agent target, or no tool calls were made).</p>
             ) : (
               lineage.toolCalls.map((entry, i) => (
                 <div className="finding-row" key={i}>
                   <strong>{String(entry.name)}</strong>
-                  <p className="muted">{JSON.stringify(entry.input).slice(0, 200)}</p>
+                  <details>
+                    <summary>Full arguments</summary>
+                    <pre className="config-preview">
+                      {typeof entry.input === 'string' ? entry.input : JSON.stringify(entry.input, null, 2)}
+                    </pre>
+                  </details>
                 </div>
               ))
             )}

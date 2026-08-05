@@ -8838,13 +8838,16 @@ async function buildLineageGraph(target) {
           traceId: detail.id,
           observationId: obs.id,
           startTime: obs.startTime,
+          endTime: obs.endTime,
           model: obs.model,
           modelArtifact: obsMeta.modelArtifact,
+          modelParameters: obs.modelParameters,
           input: obs.input,
           output: obs.output,
           usage: obs.usageDetails,
           cost: obs.costDetails,
           level: obs.level,
+          statusMessage: obs.statusMessage,
         });
       } else if (obs.type === 'RETRIEVER') {
         retrievalContexts.push({ traceId: detail.id, observationId: obs.id, input: obs.input, output: obs.output, metadata: obsMeta });
