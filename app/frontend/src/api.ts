@@ -9,6 +9,13 @@ import type {
   RunTraceRow,
   TargetExportPayload,
   TargetDataset,
+  TargetLineage,
+  LineageScoreConfigsResponse,
+  ReviewQueueItem,
+  ReviewQueueResponse,
+  LineageComment,
+  LineageCommentsResponse,
+  PromptVersionHistoryResponse,
   TargetReport,
   TargetSchedule,
   WorkflowCatalogResponse,
@@ -526,6 +533,69 @@ export function getTargetReport(token: string, id: string): Promise<TargetReport
   return request<TargetReport>(`/api/targets/${id}/report`, token);
 }
 
+export function getTargetLineage(token: string, id: string): Promise<TargetLineage> {
+  return request<TargetLineage>(`/api/targets/${id}/lineage`, token);
+}
+
+export function getLineageScoreConfigs(token: string, id: string): Promise<LineageScoreConfigsResponse> {
+  return request<LineageScoreConfigsResponse>(`/api/targets/${id}/lineage/score-configs`, token);
+}
+
+export function submitGovernanceScore(
+  token: string,
+  id: string,
+  payload: { traceId: string; observationId?: string; configName: string; label: string; comment?: string },
+): Promise<{ score: unknown }> {
+  return request<{ score: unknown }>(`/api/targets/${id}/lineage/scores`, token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function addToReviewQueue(token: string, id: string, traceId: string): Promise<{ item: ReviewQueueItem }> {
+  return request<{ item: ReviewQueueItem }>(`/api/targets/${id}/lineage/review-queue`, token, {
+    method: 'POST',
+    body: JSON.stringify({ traceId }),
+  });
+}
+
+export function listReviewQueue(token: string, id: string): Promise<ReviewQueueResponse> {
+  return request<ReviewQueueResponse>(`/api/targets/${id}/lineage/review-queue`, token);
+}
+
+export function markReviewQueueItemComplete(token: string, id: string, itemId: string): Promise<{ item: ReviewQueueItem }> {
+  return request<{ item: ReviewQueueItem }>(`/api/targets/${id}/lineage/review-queue/${itemId}`, token, {
+    method: 'PATCH',
+    body: JSON.stringify({}),
+  });
+}
+
+export function listLineageComments(token: string, id: string, traceId: string): Promise<LineageCommentsResponse> {
+  return request<LineageCommentsResponse>(`/api/targets/${id}/lineage/comments?traceId=${encodeURIComponent(traceId)}`, token);
+}
+
+export function addLineageComment(token: string, id: string, traceId: string, content: string): Promise<{ comment: LineageComment }> {
+  return request<{ comment: LineageComment }>(`/api/targets/${id}/lineage/comments`, token, {
+    method: 'POST',
+    body: JSON.stringify({ traceId, content }),
+  });
+}
+
+export function getPromptVersionHistory(token: string, id: string): Promise<PromptVersionHistoryResponse> {
+  return request<PromptVersionHistoryResponse>(`/api/targets/${id}/lineage/prompt-versions`, token);
+}
+
+export function registerModelCostEstimate(
+  token: string,
+  id: string,
+  payload: { modelName: string; inputPricePerToken?: number; outputPricePerToken?: number },
+): Promise<{ model: unknown; note: string }> {
+  return request<{ model: unknown; note: string }>(`/api/targets/${id}/lineage/model-price`, token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export function compareRuns(
   token: string,
   id: string,
@@ -594,6 +664,48 @@ export function activateDataset(
 
 export function deleteDataset(token: string, id: string, datasetId: string): Promise<void> {
   return request<void>(`/api/targets/${id}/datasets/${datasetId}`, token, { method: 'DELETE' });
+}
+
+export interface CyberSecEvalBenchmark {
+  key: string;
+  label: string;
+  description: string;
+  assertType: string;
+  category: string;
+  requiresJudge: boolean;
+  rowCount: number;
+}
+
+export interface CyberSecEvalUnavailableBenchmark {
+  key: string;
+  label: string;
+  reason: string;
+}
+
+export function listCyberSecEvalBenchmarks(
+  token: string,
+  id: string,
+): Promise<{
+  sourceLabel: string;
+  sourceRepo: string;
+  sourceCommit: string;
+  available: CyberSecEvalBenchmark[];
+  unavailable: CyberSecEvalUnavailableBenchmark[];
+}> {
+  return request(`/api/targets/${id}/stages/eval/cyberseceval-benchmarks`, token);
+}
+
+export function importCyberSecEvalBenchmark(
+  token: string,
+  id: string,
+  key: string,
+  active: boolean,
+): Promise<{ dataset: TargetDataset; detail: TargetDetailResponse }> {
+  return request<{ dataset: TargetDataset; detail: TargetDetailResponse }>(
+    `/api/targets/${id}/stages/eval/cyberseceval-benchmarks/${key}/import`,
+    token,
+    { method: 'POST', body: JSON.stringify({ active }) },
+  );
 }
 
 export interface TargetSchedulePayload {

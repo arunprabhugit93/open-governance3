@@ -293,10 +293,21 @@ export interface TargetReport {
     // multi-turn/adaptive attack upstream) and was approximated as a single self-hosted-LLM
     // transform instead — reduced fidelity vs upstream, always labeled.
     strategyApproximated?: boolean;
+    // Present only on rows imported from a CyberSecEval benchmark dataset (forked from
+    // PurpleLlama — see app/shared/cyberseceval.cjs).
+    cyberSecEval?: {
+      benchmark: string;
+      category: string;
+      source: string;
+      [key: string]: unknown;
+    };
   }>;
   frameworkCompliance: {
     pluginPassRateThreshold: number;
     redTeamRunsConsidered: number;
+    // Eval-stage runs that contributed at least one CyberSecEval-tagged row to categoryStats —
+    // counted separately from redTeamRunsConsidered so "N red-team runs" text stays accurate.
+    cyberSecEvalRunsConsidered: number;
     frameworksEvaluated: number;
     frameworksCompliant: number;
     totalFrameworks: number;
@@ -327,6 +338,117 @@ export interface TargetReport {
     }>;
   };
   engineConfigYaml: string;
+}
+
+export interface LineageGraphNode {
+  id: string;
+  type: string;
+  label: string;
+  data: Record<string, unknown>;
+}
+
+export interface LineageGraphEdge {
+  from: string;
+  to: string;
+  kind: string;
+}
+
+export interface TargetLineage {
+  configured: boolean;
+  available?: boolean;
+  reason?: string;
+  targetId?: string;
+  summary?: {
+    totalTraces: number;
+    totalObservations: number;
+    totalRuns: number;
+    totalInferenceCalls: number;
+  };
+  graph?: { nodes: LineageGraphNode[]; edges: LineageGraphEdge[] };
+  trainingProvenance?: Array<Record<string, unknown>>;
+  promptVersions?: Array<Record<string, unknown>>;
+  datasets?: Array<Record<string, unknown>>;
+  runs?: Array<Record<string, unknown>>;
+  inferenceCalls?: Array<Record<string, unknown>>;
+  retrievalContexts?: Array<Record<string, unknown>>;
+  toolCalls?: Array<Record<string, unknown>>;
+  exports?: Array<Record<string, unknown>>;
+  governanceScores?: Array<{
+    id: string;
+    traceId: string;
+    observationId: string | null;
+    name: string;
+    value: string | number;
+    comment: string | null;
+    dataType: string;
+    timestamp: string;
+  }>;
+  usageSummary?: Array<{
+    model: string;
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    totalCostUsd: number | null;
+    costSource: 'vendor' | 'operator-estimated' | null;
+  }>;
+}
+
+export interface LineageScoreConfig {
+  id: string;
+  name: string;
+  dataType: string;
+  categories?: Array<{ label: string; value: number }>;
+  description?: string | null;
+}
+
+export interface LineageScoreConfigsResponse {
+  configured: boolean;
+  configs: LineageScoreConfig[];
+}
+
+export interface ReviewQueueItem {
+  id: string;
+  queueId: string;
+  objectId: string;
+  objectType: string;
+  status: 'PENDING' | 'COMPLETED';
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewQueueResponse {
+  configured: boolean;
+  available?: boolean;
+  reason?: string;
+  items: ReviewQueueItem[];
+}
+
+export interface LineageComment {
+  id: string;
+  objectId: string;
+  objectType: string;
+  content: string;
+  authorUserId?: string | null;
+  createdAt: string;
+}
+
+export interface LineageCommentsResponse {
+  configured: boolean;
+  available?: boolean;
+  reason?: string;
+  comments: LineageComment[];
+}
+
+export interface PromptVersionHistoryResponse {
+  configured: boolean;
+  available?: boolean;
+  reason?: string;
+  name?: string;
+  versions?: number[];
+  labels?: string[];
+  lastUpdatedAt?: string;
 }
 
 export interface RunComparison {

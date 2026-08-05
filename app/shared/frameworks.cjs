@@ -1086,6 +1086,107 @@ const FRAMEWORK_MAPPINGS = {
   }
 };
 
+// --- CyberSecEval extension (hand-authored, not re-ported from promptfoo-source) ---------------
+// Everything above this point is a direct 1:1 port of promptfoo's own *_MAPPING constants — do
+// not hand-edit it, re-port instead (see file header). Everything below attributes CyberSecEval
+// benchmark categories (forked from PurpleLlama — see app/shared/cyberseceval.cjs and
+// datasets/cyberseceval/PROVENANCE.md) to the SAME controls above, so a target run through the
+// eval workspace with a CyberSecEval dataset activated shows up in framework compliance exactly
+// like a red-team plugin does — no new aggregation logic, just more entries in the plugins
+// arrays computeFrameworkCompliance already iterates.
+//
+// Mapping rationale (each is a genuine methodological fit, not a forced one — mitre-frr, which
+// measures over-refusal rather than a security vulnerability, is deliberately left out of
+// OWASP/ISO where it wouldn't honestly belong):
+//   cyberseceval:insecure-code          -> OWASP LLM05 Improper Output Handling (generated code
+//                                          IS the model's output); NIST 2.7 and ISO 42001
+//                                          security both already list shell/sql-injection, the
+//                                          exact CWE families this benchmark's ICD rules detect.
+//   cyberseceval:prompt-injection       -> OWASP LLM01 Prompt Injection (exact match); MITRE
+//                                          ATLAS ai-attack-staging already lists
+//                                          indirect-prompt-injection; ISO 42001 robustness.
+//   cyberseceval:interpreter-abuse      -> OWASP LLM06 Excessive Agency (a code interpreter
+//                                          acting on malicious instructions IS excessive
+//                                          agency); NIST's excessive-agency controls; MITRE
+//                                          ATLAS execution; ISO 42001 security.
+//   cyberseceval:mitre-uplift:<tactic>  -> mitre.json's own `mitre_category` field already IS a
+//                                          MITRE ATT&CK tactic name, the same taxonomy MITRE
+//                                          ATLAS organizes its controls by — each of the 10
+//                                          tactic-specific ids maps to its exact ATLAS tactic
+//                                          control, plus NIST 2.7 (harmful:cybercrime) and OWASP
+//                                          LLM01 (which already lists bare 'harmful') and ISO
+//                                          42001 safety (harmful:cybercrime).
+//   cyberseceval:mitre-frr              -> NIST AI RMF only (2.9) — over-refusal is a
+//                                          reliability/calibration property, one of NIST AI
+//                                          RMF's named trustworthy-AI characteristics ("Valid
+//                                          and Reliable"), not a security vulnerability, so it
+//                                          is NOT added to OWASP/ISO controls it wouldn't
+//                                          honestly belong to.
+//   cyberseceval:spear-phishing         -> OWASP LLM01 (harmful collection) and ISO 42001
+//                                          safety (harmful:cybercrime) — social-engineering
+//                                          content generation, same family as MITRE uplift.
+{
+  const MITRE_UPLIFT_TACTIC_CATEGORIES = [
+    'cyberseceval:mitre-uplift:command-and-control',
+    'cyberseceval:mitre-uplift:collection',
+    'cyberseceval:mitre-uplift:discovery',
+    'cyberseceval:mitre-uplift:defense-evasion',
+    'cyberseceval:mitre-uplift:execution',
+    'cyberseceval:mitre-uplift:exfiltration',
+    'cyberseceval:mitre-uplift:lateral-movement',
+    'cyberseceval:mitre-uplift:persistence',
+    'cyberseceval:mitre-uplift:privilege-escalation',
+    'cyberseceval:mitre-uplift:reconnaissance',
+  ];
+  const MITRE_TACTIC_TO_ATLAS_CONTROL = {
+    'cyberseceval:mitre-uplift:command-and-control': 'mitre:atlas:command-and-control',
+    'cyberseceval:mitre-uplift:collection': 'mitre:atlas:collection',
+    'cyberseceval:mitre-uplift:discovery': 'mitre:atlas:discovery',
+    'cyberseceval:mitre-uplift:defense-evasion': 'mitre:atlas:defense-evasion',
+    'cyberseceval:mitre-uplift:execution': 'mitre:atlas:execution',
+    'cyberseceval:mitre-uplift:exfiltration': 'mitre:atlas:exfiltration',
+    'cyberseceval:mitre-uplift:lateral-movement': 'mitre:atlas:lateral-movement',
+    'cyberseceval:mitre-uplift:persistence': 'mitre:atlas:persistence',
+    'cyberseceval:mitre-uplift:privilege-escalation': 'mitre:atlas:privilege-escalation',
+    'cyberseceval:mitre-uplift:reconnaissance': 'mitre:atlas:reconnaissance',
+  };
+
+  const addPlugins = (frameworkId, controlId, pluginIds) => {
+    const control = FRAMEWORK_MAPPINGS[frameworkId]?.[controlId];
+    if (!control) throw new Error(`CyberSecEval crosswalk: unknown control ${frameworkId}/${controlId}`);
+    for (const pluginId of pluginIds) {
+      if (!control.plugins.includes(pluginId)) control.plugins.push(pluginId);
+    }
+  };
+
+  addPlugins('owasp:llm', 'owasp:llm:05', ['cyberseceval:insecure-code']);
+  addPlugins('nist:ai:measure', 'nist:ai:measure:2.7', ['cyberseceval:insecure-code']);
+  addPlugins('iso:42001', 'iso:42001:security', ['cyberseceval:insecure-code']);
+
+  addPlugins('owasp:llm', 'owasp:llm:01', ['cyberseceval:prompt-injection']);
+  addPlugins('mitre:atlas', 'mitre:atlas:ai-attack-staging', ['cyberseceval:prompt-injection']);
+  addPlugins('iso:42001', 'iso:42001:robustness', ['cyberseceval:prompt-injection']);
+
+  addPlugins('owasp:llm', 'owasp:llm:06', ['cyberseceval:interpreter-abuse']);
+  addPlugins('nist:ai:measure', 'nist:ai:measure:2.7', ['cyberseceval:interpreter-abuse']);
+  addPlugins('nist:ai:measure', 'nist:ai:measure:2.9', ['cyberseceval:interpreter-abuse']);
+  addPlugins('mitre:atlas', 'mitre:atlas:execution', ['cyberseceval:interpreter-abuse']);
+  addPlugins('iso:42001', 'iso:42001:security', ['cyberseceval:interpreter-abuse']);
+
+  addPlugins('owasp:llm', 'owasp:llm:01', MITRE_UPLIFT_TACTIC_CATEGORIES);
+  addPlugins('nist:ai:measure', 'nist:ai:measure:2.7', MITRE_UPLIFT_TACTIC_CATEGORIES);
+  addPlugins('iso:42001', 'iso:42001:safety', MITRE_UPLIFT_TACTIC_CATEGORIES);
+  for (const [categoryId, controlId] of Object.entries(MITRE_TACTIC_TO_ATLAS_CONTROL)) {
+    addPlugins('mitre:atlas', controlId, [categoryId]);
+  }
+
+  addPlugins('nist:ai:measure', 'nist:ai:measure:2.9', ['cyberseceval:mitre-frr']);
+
+  addPlugins('owasp:llm', 'owasp:llm:01', ['cyberseceval:spear-phishing']);
+  addPlugins('iso:42001', 'iso:42001:safety', ['cyberseceval:spear-phishing']);
+}
+// --- end CyberSecEval extension -----------------------------------------------------------------
+
 // Category display names for frameworks whose controls are numbered rather than named
 // (owasp:llm:01 -> OWASP_LLM_TOP_10_NAMES[0], etc). Index = parseInt(controlNumber) - 1.
 const CATEGORY_NAMES_BY_FRAMEWORK = {
@@ -1268,7 +1369,28 @@ const RISK_SEVERITY_BY_PLUGIN = {
   "coding-agent:automation-poisoning": "high",
   "coding-agent:steganographic-exfil": "high",
   "coding-agent:core": "high",
-  "coding-agent:all": "high"
+  "coding-agent:all": "high",
+  // CyberSecEval categories (forked from PurpleLlama — see cyberseceval.cjs) — severities mirror
+  // upstream's own framing: a model that actively HELPS with cyberattacks/malicious code is
+  // critical; generating unreviewed insecure code or enabling interpreter abuse is high (real
+  // risk, but one step short of active attacker assistance); over-refusal is low (a usability
+  // cost, not a vulnerability).
+  "cyberseceval:insecure-code": "high",
+  "cyberseceval:mitre-uplift": "critical",
+  "cyberseceval:mitre-uplift:command-and-control": "critical",
+  "cyberseceval:mitre-uplift:collection": "critical",
+  "cyberseceval:mitre-uplift:discovery": "critical",
+  "cyberseceval:mitre-uplift:defense-evasion": "critical",
+  "cyberseceval:mitre-uplift:execution": "critical",
+  "cyberseceval:mitre-uplift:exfiltration": "critical",
+  "cyberseceval:mitre-uplift:lateral-movement": "critical",
+  "cyberseceval:mitre-uplift:persistence": "critical",
+  "cyberseceval:mitre-uplift:privilege-escalation": "critical",
+  "cyberseceval:mitre-uplift:reconnaissance": "critical",
+  "cyberseceval:mitre-frr": "low",
+  "cyberseceval:prompt-injection": "high",
+  "cyberseceval:interpreter-abuse": "high",
+  "cyberseceval:spear-phishing": "high"
 };
 
 // Plugin id -> short human-readable label (e.g. "harmful:hate" -> "Hate").
@@ -1655,7 +1777,26 @@ const DISPLAY_NAME_OVERRIDES = {
   "coding-agent:generated-vulnerability": "Generated Vulnerability",
   "coding-agent:automation-poisoning": "Automation Poisoning",
   "coding-agent:steganographic-exfil": "Steganographic Exfiltration",
-  "coding-agent:verifier-sabotage": "Verifier Sabotage"
+  "coding-agent:verifier-sabotage": "Verifier Sabotage",
+  // Explicitly name-check "CyberSecEval" in every display name — this is what makes the
+  // benchmark traceable by name in evidence packs/exports for regulated pilots, not just an
+  // internal category id.
+  "cyberseceval:insecure-code": "CyberSecEval: Insecure Code Generation",
+  "cyberseceval:mitre-uplift": "CyberSecEval: MITRE Cyberattack Uplift",
+  "cyberseceval:mitre-uplift:command-and-control": "CyberSecEval: MITRE Uplift (Command & Control)",
+  "cyberseceval:mitre-uplift:collection": "CyberSecEval: MITRE Uplift (Collection)",
+  "cyberseceval:mitre-uplift:discovery": "CyberSecEval: MITRE Uplift (Discovery)",
+  "cyberseceval:mitre-uplift:defense-evasion": "CyberSecEval: MITRE Uplift (Defense Evasion)",
+  "cyberseceval:mitre-uplift:execution": "CyberSecEval: MITRE Uplift (Execution)",
+  "cyberseceval:mitre-uplift:exfiltration": "CyberSecEval: MITRE Uplift (Exfiltration)",
+  "cyberseceval:mitre-uplift:lateral-movement": "CyberSecEval: MITRE Uplift (Lateral Movement)",
+  "cyberseceval:mitre-uplift:persistence": "CyberSecEval: MITRE Uplift (Persistence)",
+  "cyberseceval:mitre-uplift:privilege-escalation": "CyberSecEval: MITRE Uplift (Privilege Escalation)",
+  "cyberseceval:mitre-uplift:reconnaissance": "CyberSecEval: MITRE Uplift (Reconnaissance)",
+  "cyberseceval:mitre-frr": "CyberSecEval: MITRE False Refusal Rate",
+  "cyberseceval:prompt-injection": "CyberSecEval: Prompt Injection Resistance",
+  "cyberseceval:interpreter-abuse": "CyberSecEval: Code Interpreter Abuse",
+  "cyberseceval:spear-phishing": "CyberSecEval: Spear Phishing Capability"
 };
 
 const SEVERITY_DISPLAY_NAMES = {

@@ -1,5 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ReactFlow, Background, Controls, MiniMap, type Node as FlowNode, type Edge as FlowEdge } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import {
   createTarget,
   activateDataset,
@@ -20,6 +22,16 @@ import {
   exportTarget,
   compareRuns,
   getTargetReport,
+  getTargetLineage,
+  getLineageScoreConfigs,
+  submitGovernanceScore,
+  addToReviewQueue,
+  listReviewQueue,
+  markReviewQueueItemComplete,
+  listLineageComments,
+  addLineageComment,
+  getPromptVersionHistory,
+  registerModelCostEstimate,
   getRunDetail,
   importEvalStageConfig,
   generateEvalDataset,
@@ -50,6 +62,10 @@ import {
   listApiTokens,
   createApiToken,
   deleteApiToken,
+  listCyberSecEvalBenchmarks,
+  importCyberSecEvalBenchmark,
+  type CyberSecEvalBenchmark,
+  type CyberSecEvalUnavailableBenchmark,
   type EvalAssertion,
   type EvalStageConfigPayload,
   type ModelAuditStageConfigPayload,
@@ -74,6 +90,12 @@ import type {
   SupportedTargetType,
   TargetDataset,
   TargetDetailResponse,
+  TargetLineage,
+  LineageGraphNode,
+  LineageScoreConfig,
+  ReviewQueueItem,
+  LineageComment,
+  PromptVersionHistoryResponse,
   TargetReport,
   TargetSchedule,
   TargetTypeKey,
@@ -84,10 +106,10 @@ import './styles.css';
 
 type View = 'registry' | 'onboard' | 'detail' | 'users' | 'tokens';
 type ExecutableStageKey = 'eval' | 'red_team' | 'model_audit';
-type StageKey = ExecutableStageKey | 'evidence';
+type StageKey = ExecutableStageKey | 'evidence' | 'lineage';
 type KeyValueRow = { id: string; name: string; value: string };
 
-const STAGE_KEYS: StageKey[] = ['eval', 'red_team', 'model_audit', 'evidence'];
+const STAGE_KEYS: StageKey[] = ['eval', 'red_team', 'model_audit', 'evidence', 'lineage'];
 
 type Route = { view: View; targetId?: string; stage?: StageKey };
 
@@ -346,53 +368,143 @@ const emptyWorkflowCatalog: WorkflowCatalogResponse = {
 function Shell({
   children,
   onRegistry,
+  onOnboard,
   onUsers,
   onTokens,
   onLogout,
   isAdmin,
+  view,
+  user,
 }: {
   children: React.ReactNode;
   onRegistry: () => void;
+  onOnboard: () => void;
   onUsers?: () => void;
   onTokens?: () => void;
   onLogout: () => void;
   isAdmin?: boolean;
+  view: View;
+  user: User | null;
 }) {
+  const isAdminUser = isAdmin ?? user?.role === 'admin';
+  const initials = user
+    ? user.email
+        .split('@')[0]
+        .split(/[._-]+/)
+        .map((part) => part[0])
+        .filter(Boolean)
+        .slice(0, 2)
+        .join('')
+        .toUpperCase()
+    : 'OG';
+  const pageTitle =
+    view === 'registry' || view === 'detail'
+      ? 'Registry'
+      : view === 'onboard'
+        ? 'Onboarding'
+        : view === 'users'
+          ? 'User management'
+          : 'API tokens';
+
   return (
     <section className="app-shell">
-      <header className="topbar">
-        <div className="topbar-left">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
           <div className="mark">OG</div>
-          <div>
-            <p className="eyebrow">Open Governance</p>
-            <p className="topbar-title">Assurance control plane</p>
+          <div className="brand-copy">
+            <p className="brand-name">Open Governance</p>
+            <p className="brand-sub">Assurance control plane</p>
           </div>
-          {isAdmin === false ? (
-            <span className="badge viewer-badge" title="Viewer accounts can browse everything but can't run, save, or delete anything — those actions will be blocked.">
-              Viewer (read-only)
-            </span>
-          ) : null}
         </div>
-        <div className="topbar-actions">
-          <button className="secondary-button" type="button" onClick={onRegistry}>
+        <nav className="sidebar-nav" aria-label="Primary">
+          <p className="nav-section-label">Workspace</p>
+          <button
+            className={`nav-item${view === 'registry' || view === 'detail' ? ' active' : ''}`}
+            type="button"
+            onClick={onRegistry}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="2" y="2" width="5" height="5" rx="1" />
+              <rect x="9" y="2" width="5" height="5" rx="1" />
+              <rect x="2" y="9" width="5" height="5" rx="1" />
+              <rect x="9" y="9" width="5" height="5" rx="1" />
+            </svg>
             Registry
           </button>
-          {isAdmin && onUsers ? (
-            <button className="secondary-button" type="button" onClick={onUsers}>
-              Users
-            </button>
-          ) : null}
-          {isAdmin && onTokens ? (
-            <button className="secondary-button" type="button" onClick={onTokens}>
-              API tokens
-            </button>
-          ) : null}
-          <button className="ghost-button" type="button" onClick={onLogout}>
-            Sign out
+          <button
+            className={`nav-item${view === 'onboard' ? ' active' : ''}`}
+            type="button"
+            onClick={onOnboard}
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="8" cy="8" r="6" />
+              <path d="M8 5.5v5M5.5 8h5" />
+            </svg>
+            Onboard model
           </button>
+          {isAdminUser ? (
+            <>
+              <p className="nav-section-label">Administration</p>
+              <button
+                className={`nav-item${view === 'users' ? ' active' : ''}`}
+                type="button"
+                onClick={onUsers}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="8" cy="5.5" r="2.5" />
+                  <path d="M3 13.5c.6-2.4 2.6-3.5 5-3.5s4.4 1.1 5 3.5" />
+                </svg>
+                Users
+              </button>
+              <button
+                className={`nav-item${view === 'tokens' ? ' active' : ''}`}
+                type="button"
+                onClick={onTokens}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="5.5" cy="10.5" r="3" />
+                  <path d="M7.5 8.5 13 3M10.5 5.5l1.5 1.5M8.5 7.5l1.5 1.5" />
+                </svg>
+                API tokens
+              </button>
+            </>
+          ) : null}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="user-chip">
+            <span className="avatar">{initials}</span>
+            <span className="user-copy">
+              <span className="user-name">{user?.email ?? 'Signed out'}</span>
+              <span className="user-role">{isAdminUser ? 'Administrator' : 'Viewer'}</span>
+            </span>
+            <button className="icon-button" type="button" onClick={onLogout} aria-label="Sign out" title="Sign out">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6.5 2.5H4a1.5 1.5 0 0 0-1.5 1.5v8A1.5 1.5 0 0 0 4 13.5h2.5" />
+                <path d="M10.5 5.5 13.5 8l-3 2.5M13.5 8H7" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </header>
-      <div className="content">{children}</div>
+      </aside>
+      <div className="app-frame">
+        <header className="topbar">
+          <div className="topbar-left">
+            <p className="eyebrow">Open Governance</p>
+            <p className="topbar-title">{pageTitle}</p>
+          </div>
+          <div className="topbar-actions">
+            {isAdminUser === false ? (
+              <span className="badge viewer-badge" title="Viewer accounts can browse everything but can't run, save, or delete anything — those actions will be blocked.">
+                Viewer (read-only)
+              </span>
+            ) : null}
+            <button className="ghost-button" type="button" onClick={onLogout}>
+              Sign out
+            </button>
+          </div>
+        </header>
+        <div className="content">{children}</div>
+      </div>
     </section>
   );
 }
@@ -1085,6 +1197,15 @@ function EvalWorkspace({
   const [configImporting, setConfigImporting] = useState(false);
   const [datasets, setDatasets] = useState<TargetDataset[]>([]);
   const [datasetName, setDatasetName] = useState('Eval dataset');
+  const [cyberSecEvalCatalog, setCyberSecEvalCatalog] = useState<{
+    sourceLabel: string;
+    sourceRepo: string;
+    sourceCommit: string;
+    available: CyberSecEvalBenchmark[];
+    unavailable: CyberSecEvalUnavailableBenchmark[];
+  } | null>(null);
+  const [cyberSecEvalImporting, setCyberSecEvalImporting] = useState('');
+  const [cyberSecEvalError, setCyberSecEvalError] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [running, setRunning] = useState(false);
@@ -1148,8 +1269,39 @@ function EvalWorkspace({
     }
   }
 
+  async function loadCyberSecEvalCatalog() {
+    try {
+      const payload = await listCyberSecEvalBenchmarks(token, detail.target.id);
+      setCyberSecEvalCatalog(payload);
+    } catch {
+      setCyberSecEvalCatalog(null);
+    }
+  }
+
+  async function importCyberSecEval(key: string, active: boolean) {
+    if (isViewer) return;
+    setCyberSecEvalImporting(key);
+    setCyberSecEvalError('');
+    setError('');
+    setMessage('');
+    try {
+      const result = await importCyberSecEvalBenchmark(token, detail.target.id, key, active);
+      if (active) {
+        setTestCases(result.dataset.rows.map(normalizeCaseForEditor));
+      }
+      await onRefresh(result.detail);
+      await loadDatasets();
+      setMessage(`Imported "${result.dataset.name}" (${result.dataset.rows.length} cases)${active ? ' and activated it.' : '.'}`);
+    } catch (err) {
+      setCyberSecEvalError(err instanceof Error ? err.message : 'Failed to import CyberSecEval benchmark');
+    } finally {
+      setCyberSecEvalImporting('');
+    }
+  }
+
   useEffect(() => {
     loadDatasets();
+    loadCyberSecEvalCatalog();
   }, [detail.target.id, token]);
 
   function updateProvider(index: number, patch: Partial<EvalStageConfigPayload['providers'][number]>) {
@@ -2284,6 +2436,60 @@ function EvalWorkspace({
               <p className="muted">No saved datasets yet.</p>
             )}
           </div>
+        </section>
+
+        <section className="subpanel">
+          <h3>CyberSecEval Benchmarks</h3>
+          <p className="field-help">
+            Forked from{' '}
+            <span title={cyberSecEvalCatalog?.sourceCommit || ''}>{cyberSecEvalCatalog?.sourceLabel || 'PurpleLlama CyberSecEval'}</span>
+            {' '}— vendored into datasets/cyberseceval/, never fetched at runtime. Importing adds a normal dataset below;
+            benchmark-specific scoring runs through this product's existing assertion catalog and judge-provider config.
+          </p>
+          {cyberSecEvalError ? <p className="error">{cyberSecEvalError}</p> : null}
+          <div className="dataset-list">
+            {(cyberSecEvalCatalog?.available || []).map((benchmark) => (
+              <div className="dataset-row" key={benchmark.key}>
+                <div>
+                  <strong>{benchmark.label}</strong>
+                  <p className="muted">
+                    {benchmark.rowCount} cases · {benchmark.requiresJudge ? 'requires judge provider' : 'no judge required'}
+                  </p>
+                  <p className="field-help">{benchmark.description}</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={isViewer || cyberSecEvalImporting === benchmark.key}
+                  title={viewerTitle}
+                  onClick={() => importCyberSecEval(benchmark.key, false)}
+                >
+                  {cyberSecEvalImporting === benchmark.key ? 'Importing...' : 'Import'}
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={isViewer || cyberSecEvalImporting === benchmark.key}
+                  title={viewerTitle}
+                  onClick={() => importCyberSecEval(benchmark.key, true)}
+                >
+                  Import and use
+                </button>
+              </div>
+            ))}
+          </div>
+          {(cyberSecEvalCatalog?.unavailable || []).length ? (
+            <details className="field-help">
+              <summary>{cyberSecEvalCatalog?.unavailable.length} benchmark(s) not available in this deployment</summary>
+              <ul>
+                {(cyberSecEvalCatalog?.unavailable || []).map((benchmark) => (
+                  <li key={benchmark.key}>
+                    <strong>{benchmark.label}:</strong> {benchmark.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </section>
 
         <section className="subpanel">
@@ -3495,6 +3701,792 @@ function ModelAuditWorkspace({
   );
 }
 
+// Simple layered layout (BFS depth from the target root node) — deliberately not pulling in a
+// dagre-style auto-layout dependency for a graph this shallow (target -> traces -> observations,
+// rarely more than 3-4 levels deep). Keeps this feature's only new dependency to @xyflow/react
+// itself (npm-installed, bundled by Vite at build time — no runtime CDN load, consistent with
+// this deployment's zero-external-hosted-call posture).
+function layoutLineageGraph(nodes: LineageGraphNode[], edges: { from: string; to: string; kind: string }[]): { flowNodes: FlowNode[]; flowEdges: FlowEdge[] } {
+  const childrenByParent = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!childrenByParent.has(edge.from)) childrenByParent.set(edge.from, []);
+    childrenByParent.get(edge.from)!.push(edge.to);
+  }
+  const depthById = new Map<string, number>();
+  const rootId = nodes.find((n) => n.type === 'target')?.id;
+  if (rootId) {
+    const queue: Array<[string, number]> = [[rootId, 0]];
+    while (queue.length) {
+      const [id, depth] = queue.shift()!;
+      if (depthById.has(id)) continue;
+      depthById.set(id, depth);
+      for (const childId of childrenByParent.get(id) || []) queue.push([childId, depth + 1]);
+    }
+  }
+  const countByDepth = new Map<number, number>();
+  const NODE_TYPE_COLOR: Record<string, string> = {
+    target: '#1d4ed8',
+    trace: '#334155',
+    SPAN: '#7c3aed',
+    GENERATION: '#0f766e',
+    RETRIEVER: '#b45309',
+    AGENT: '#be185d',
+    TOOL: '#4d7c0f',
+  };
+  const shortTime = (iso: unknown) => {
+    if (!iso) return '';
+    const d = new Date(String(iso));
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+  // Every observation already carries enough real data (model, tokens, pass/fail, timestamp) to
+  // tell same-type nodes apart at a glance — the previous version threw all of it away and used
+  // the same generic name (e.g. "provider-call:openai-compatible") for every GENERATION node,
+  // making the graph unreadable without clicking each one individually.
+  const buildLabel = (node: LineageGraphNode): string => {
+    const d = node.data || {};
+    const meta = (d.metadata || {}) as Record<string, unknown>;
+    if (node.type === 'GENERATION') {
+      const usage = (d.usage || {}) as Record<string, number>;
+      const level = String(d.level || 'DEFAULT');
+      const status = level === 'ERROR' ? ' ⚠ ERROR' : '';
+      return [String(d.model || node.label), `${usage.total ?? '?'} tokens${status}`, shortTime(d.startTime)].filter(Boolean).join('\n');
+    }
+    if (node.type === 'SPAN') {
+      const evidence = meta.assuranceEvidence as { pass?: number; fail?: number; error?: number; total?: number } | undefined;
+      const outcome = evidence ? `${evidence.pass ?? 0}/${evidence.total ?? 0} passed` : String(meta.status || 'running');
+      return [String(meta.stageKey || node.label), outcome, shortTime(d.startTime)].filter(Boolean).join('\n');
+    }
+    if (node.type === 'trace') {
+      return [node.label, shortTime(d.timestamp)].filter(Boolean).join('\n');
+    }
+    if (node.type === 'RETRIEVER' || node.type === 'TOOL' || node.type === 'AGENT') {
+      return [node.label, shortTime(d.startTime)].filter(Boolean).join('\n');
+    }
+    return node.label;
+  };
+  const flowNodes: FlowNode[] = nodes.map((node) => {
+    const depth = depthById.get(node.id) ?? 0;
+    const yIndex = countByDepth.get(depth) || 0;
+    countByDepth.set(depth, yIndex + 1);
+    return {
+      id: node.id,
+      position: { x: depth * 260, y: yIndex * 110 },
+      data: { label: buildLabel(node) },
+      style: {
+        background: NODE_TYPE_COLOR[node.type] || '#475569',
+        color: '#fff',
+        borderRadius: 8,
+        padding: 8,
+        fontSize: 12,
+        width: 220,
+        whiteSpace: 'pre-line',
+        lineHeight: 1.4,
+      },
+    };
+  });
+  const flowEdges: FlowEdge[] = edges.map((edge, index) => ({
+    id: `e${index}-${edge.from}-${edge.to}`,
+    source: edge.from,
+    target: edge.to,
+    label: edge.kind,
+    style: { stroke: '#94a3b8' },
+  }));
+  return { flowNodes, flowEdges };
+}
+
+// Human governance sign-off form — attaches a real, auditable score (from a real Langfuse score
+// config) to the selected trace/observation. Distinct from the automated pass/fail every stage
+// run already carries; this is a reviewer's own judgment call, recorded with their identity and
+// an optional comment.
+function GovernanceScoreForm({
+  targetId,
+  token,
+  node,
+  configs,
+  onSubmitted,
+}: {
+  targetId: string;
+  token: string;
+  node: LineageGraphNode;
+  configs: LineageScoreConfig[];
+  onSubmitted: () => void;
+}) {
+  const [configName, setConfigName] = useState(configs[0]?.name || '');
+  const [label, setLabel] = useState('');
+  const [comment, setComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const activeConfig = configs.find((c) => c.name === configName);
+
+  if (node.type === 'target') return null;
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!configName || !label) return;
+    setSubmitting(true);
+    setError('');
+    setMessage('');
+    try {
+      const isObservation = node.type !== 'trace';
+      await submitGovernanceScore(token, targetId, {
+        traceId: isObservation ? node.id.replace(/^obs:/, '') : node.id.replace(/^trace:/, ''),
+        // Best-effort: for observation nodes this product's graph node id doesn't carry the
+        // parent trace id separately, so scores on observation nodes attach at the trace level
+        // — still fully auditable (comment/label preserved), just not observation-scoped.
+        configName,
+        label,
+        comment: comment.trim() || undefined,
+      });
+      setMessage('Score recorded.');
+      setComment('');
+      setLabel('');
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to submit score');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!configs.length) return null;
+
+  return (
+    <form className="form" onSubmit={handleSubmit} style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+      <p className="eyebrow">Governance sign-off</p>
+      {error ? <div className="error">{error}</div> : null}
+      {message ? <div className="success">{message}</div> : null}
+      <div className="field">
+        <label htmlFor="score-config">Rubric</label>
+        <select id="score-config" value={configName} onChange={(event) => { setConfigName(event.target.value); setLabel(''); }}>
+          {configs.map((config) => (
+            <option key={config.id} value={config.name}>
+              {config.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="score-label">Value</label>
+        <select id="score-label" value={label} onChange={(event) => setLabel(event.target.value)} required>
+          <option value="">Select...</option>
+          {(activeConfig?.categories || []).map((category) => (
+            <option key={category.label} value={category.label}>
+              {category.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="score-comment">Comment (optional)</label>
+        <textarea id="score-comment" value={comment} onChange={(event) => setComment(event.target.value)} rows={2} />
+      </div>
+      <button className="secondary-button" type="submit" disabled={submitting || !label}>
+        {submitting ? 'Submitting...' : 'Submit score'}
+      </button>
+    </form>
+  );
+}
+
+// Free-text audit-trail comments on a trace — distinct from the structured GovernanceScoreForm
+// above (fixed rubric, single value). Only rendered for trace nodes, matching the backend
+// routes' fixed objectType: 'TRACE'.
+function TraceCommentsPanel({ targetId, token, traceId }: { targetId: string; token: string; traceId: string }) {
+  const [comments, setComments] = useState<LineageComment[]>([]);
+  const [content, setContent] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  function reload() {
+    listLineageComments(token, targetId, traceId)
+      .then((payload) => setComments(payload.comments || []))
+      .catch(() => setComments([]));
+  }
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId, token, traceId]);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!content.trim()) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      await addLineageComment(token, targetId, traceId, content.trim());
+      setContent('');
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to add comment');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
+      <p className="eyebrow">Audit-trail comments</p>
+      {error ? <div className="error">{error}</div> : null}
+      {!comments.length ? (
+        <p className="muted">No comments yet.</p>
+      ) : (
+        comments.map((comment) => (
+          <div className="finding-row" key={comment.id}>
+            <p>{comment.content}</p>
+            <p className="muted">{comment.createdAt}</p>
+          </div>
+        ))
+      )}
+      <form className="form" onSubmit={handleSubmit}>
+        <textarea
+          value={content}
+          onChange={(event) => setContent(event.target.value)}
+          rows={2}
+          placeholder="Add an audit-trail note..."
+        />
+        <button className="secondary-button" type="submit" disabled={submitting || !content.trim()}>
+          {submitting ? 'Adding...' : 'Add comment'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// Lets an operator register their own cost estimate for a self-hosted model Langfuse has no
+// vendor pricing for — always clearly labeled operator-estimated (never presented as vendor
+// pricing) and honestly noted as applying only to future inference calls, not retroactively.
+function CostEstimateForm({ targetId, token, modelName, onSubmitted }: { targetId: string; token: string; modelName: string; onSubmitted: () => void }) {
+  const [inputPrice, setInputPrice] = useState('');
+  const [outputPrice, setOutputPrice] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!inputPrice && !outputPrice) return;
+    setSubmitting(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await registerModelCostEstimate(token, targetId, {
+        modelName,
+        inputPricePerToken: inputPrice ? Number(inputPrice) : undefined,
+        outputPricePerToken: outputPrice ? Number(outputPrice) : undefined,
+      });
+      setMessage(result.note);
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to register cost estimate');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form className="form" onSubmit={handleSubmit} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+      {error ? <div className="error">{error}</div> : null}
+      {message ? <div className="success">{message}</div> : null}
+      <div className="field">
+        <label>$/input token</label>
+        <input type="number" step="0.000001" min="0" value={inputPrice} onChange={(event) => setInputPrice(event.target.value)} placeholder="0.000000" />
+      </div>
+      <div className="field">
+        <label>$/output token</label>
+        <input type="number" step="0.000001" min="0" value={outputPrice} onChange={(event) => setOutputPrice(event.target.value)} placeholder="0.000000" />
+      </div>
+      <button className="secondary-button" type="submit" disabled={submitting || (!inputPrice && !outputPrice)}>
+        {submitting ? 'Saving...' : 'Set cost estimate'}
+      </button>
+    </form>
+  );
+}
+
+function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; token: string }) {
+  const [lineage, setLineage] = useState<TargetLineage | null>(null);
+  const [scoreConfigs, setScoreConfigs] = useState<LineageScoreConfig[]>([]);
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([]);
+  const [promptVersionHistory, setPromptVersionHistory] = useState<PromptVersionHistoryResponse | null>(null);
+  const [flagging, setFlagging] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'graph' | 'provenance' | 'inference' | 'evidence'>('graph');
+  const [selectedNode, setSelectedNode] = useState<LineageGraphNode | null>(null);
+
+  function reload() {
+    setLoading(true);
+    setError('');
+    getTargetLineage(token, detail.target.id)
+      .then(setLineage)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Unable to load lineage'))
+      .finally(() => setLoading(false));
+  }
+
+  function reloadReviewQueue() {
+    listReviewQueue(token, detail.target.id)
+      .then((payload) => setReviewQueue(payload.items || []))
+      .catch(() => setReviewQueue([]));
+  }
+
+  useEffect(() => {
+    reload();
+    reloadReviewQueue();
+    getLineageScoreConfigs(token, detail.target.id)
+      .then((payload) => setScoreConfigs(payload.configs || []))
+      .catch(() => setScoreConfigs([]));
+    getPromptVersionHistory(token, detail.target.id)
+      .then(setPromptVersionHistory)
+      .catch(() => setPromptVersionHistory(null));
+  }, [detail.target.id, token]);
+
+  async function handleFlagForReview(traceId: string) {
+    setFlagging(true);
+    try {
+      await addToReviewQueue(token, detail.target.id, traceId);
+      reloadReviewQueue();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to flag for review');
+    } finally {
+      setFlagging(false);
+    }
+  }
+
+  async function handleMarkReviewed(itemId: string) {
+    try {
+      await markReviewQueueItemComplete(token, detail.target.id, itemId);
+      reloadReviewQueue();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to update review status');
+    }
+  }
+
+  if (loading) {
+    return <div className="empty">Loading lineage...</div>;
+  }
+  if (error) {
+    return <div className="error">{error}</div>;
+  }
+  if (!lineage?.configured) {
+    return (
+      <div className="panel">
+        <p className="eyebrow">Lineage</p>
+        <h2>Lineage capability not configured</h2>
+        <p className="muted">
+          {lineage?.reason ||
+            'This deployment has not configured a self-hosted Langfuse instance (LANGFUSE_BASE_URL/PUBLIC_KEY/SECRET_KEY). Lineage is an additive capability — every other workflow works normally without it.'}
+        </p>
+      </div>
+    );
+  }
+  if (!lineage.available) {
+    return (
+      <div className="panel">
+        <p className="eyebrow">Lineage</p>
+        <h2>Lineage temporarily unavailable</h2>
+        <p className="muted">{lineage.reason || 'The self-hosted Langfuse instance is unreachable right now.'}</p>
+      </div>
+    );
+  }
+
+  const { flowNodes, flowEdges } = layoutLineageGraph(lineage.graph?.nodes || [], lineage.graph?.edges || []);
+
+  return (
+    <div className="detail-layout">
+      <section className="panel">
+        <p className="eyebrow">Lineage</p>
+        <h2>AI supply-chain lineage</h2>
+        <p className="muted">
+          Backward (model provenance, prompt versions, datasets) and forward (runs, inference calls, retrieval, tool
+          calls) lineage for this target — stored in a forked, self-hosted Langfuse instance, queried through this
+          product's own API. Nothing here links out to Langfuse's own UI.
+        </p>
+        <div className="registry-summary">
+          <div>
+            <p className="row-label">Traces</p>
+            <strong>{lineage.summary?.totalTraces ?? 0}</strong>
+          </div>
+          <div>
+            <p className="row-label">Observations</p>
+            <strong>{lineage.summary?.totalObservations ?? 0}</strong>
+          </div>
+          <div>
+            <p className="row-label">Runs</p>
+            <strong>{lineage.summary?.totalRuns ?? 0}</strong>
+          </div>
+          <div>
+            <p className="row-label">Inference calls</p>
+            <strong>{lineage.summary?.totalInferenceCalls ?? 0}</strong>
+          </div>
+        </div>
+        <div className="tab-row">
+          {(['graph', 'provenance', 'inference', 'evidence'] as const).map((tab) => (
+            <button
+              key={tab}
+              className={`tab-button${activeTab === tab ? ' active' : ''}`}
+              type="button"
+              onClick={() => setActiveTab(tab)}
+            >
+              {tab === 'graph' ? 'Graph' : tab === 'provenance' ? 'Provenance (backward)' : tab === 'inference' ? 'Inference calls' : 'Evidence (forward)'}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'graph' ? (
+          <div style={{ display: 'flex', gap: 16 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8, fontSize: 12 }}>
+                {[
+                  ['target', '#1d4ed8', 'Target'],
+                  ['trace', '#334155', 'Trace (a run/event)'],
+                  ['SPAN', '#7c3aed', 'Stage run'],
+                  ['GENERATION', '#0f766e', 'Inference call'],
+                  ['RETRIEVER', '#b45309', 'RAG retrieval'],
+                  ['TOOL', '#4d7c0f', 'Tool call'],
+                ].map(([, color, label]) => (
+                  <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: 'inline-block' }} />
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <p className="muted" style={{ marginBottom: 8 }}>
+                Click any node for its full detail. Generation nodes show model + token count + timestamp; stage-run
+                nodes show pass/fail outcome — hover isn't needed to tell nodes of the same type apart.
+              </p>
+            <div style={{ height: 520, border: '1px solid #334155', borderRadius: 8 }}>
+              <ReactFlow
+                nodes={flowNodes}
+                edges={flowEdges}
+                onNodeClick={(_event, node) => {
+                  const found = (lineage.graph?.nodes || []).find((n) => n.id === node.id) || null;
+                  setSelectedNode(found);
+                }}
+                fitView
+              >
+                <Background />
+                <Controls />
+                <MiniMap />
+              </ReactFlow>
+            </div>
+            </div>
+            {selectedNode ? (
+              <div className="panel" style={{ width: 320 }}>
+                <p className="eyebrow">{selectedNode.type}</p>
+                <h3>{selectedNode.label}</h3>
+                <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11, maxHeight: 440, overflow: 'auto' }}>
+                  {JSON.stringify(selectedNode.data, null, 2)}
+                </pre>
+                {selectedNode.type === 'trace' ? (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={flagging || reviewQueue.some((item) => item.objectId === selectedNode.id.replace(/^trace:/, ''))}
+                    onClick={() => handleFlagForReview(selectedNode.id.replace(/^trace:/, ''))}
+                  >
+                    {reviewQueue.some((item) => item.objectId === selectedNode.id.replace(/^trace:/, ''))
+                      ? 'Already in review queue'
+                      : 'Flag for human review'}
+                  </button>
+                ) : null}
+                {selectedNode.type === 'trace' ? (
+                  <TraceCommentsPanel
+                    targetId={detail.target.id}
+                    token={token}
+                    traceId={selectedNode.id.replace(/^trace:/, '')}
+                  />
+                ) : null}
+                <GovernanceScoreForm
+                  targetId={detail.target.id}
+                  token={token}
+                  node={selectedNode}
+                  configs={scoreConfigs}
+                  onSubmitted={reload}
+                />
+              </div>
+            ) : (
+              <div className="panel muted" style={{ width: 320 }}>
+                Click a node to inspect its full facet data (ModelArtifact, TrainingProvenance, PromptVersion,
+                RetrievalContext, or AssuranceEvidence — whichever applies to that node).
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === 'provenance' ? (
+          <div className="detail-layout">
+            <section>
+              <h3>Training provenance</h3>
+              {!lineage.trainingProvenance?.length ? (
+                <p className="muted">No training-provenance record found for this target.</p>
+              ) : (
+                lineage.trainingProvenance.map((entry, i) => (
+                  <div className="finding-row" key={i}>
+                    <p>
+                      <strong>Attestation source:</strong> {String(entry.attestationSource)}{' '}
+                      {entry.unattested ? <span className="badge">unattested gap</span> : null}
+                    </p>
+                    {entry.cardUrl ? <p className="muted">Card: {String(entry.cardUrl)}</p> : null}
+                    <p className="muted">{String(entry.note || '')}</p>
+                  </div>
+                ))
+              )}
+            </section>
+            <section>
+              <h3>Prompt versions</h3>
+              {promptVersionHistory?.configured && promptVersionHistory.versions?.length ? (
+                <p className="muted">
+                  Real Langfuse-native version history for <code>{promptVersionHistory.name}</code>: versions{' '}
+                  {promptVersionHistory.versions.join(', ')} (labels: {(promptVersionHistory.labels || []).join(', ') || 'none'}).
+                </p>
+              ) : null}
+              {!lineage.promptVersions?.length ? (
+                <p className="muted">No prompt-version changes recorded.</p>
+              ) : (
+                lineage.promptVersions.map((entry, i) => (
+                  <div className="finding-row" key={i}>
+                    <p className="muted">{String(entry.timestamp)}</p>
+                    <pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{String(entry.promptTemplate ?? entry.systemPrompt ?? '')}</pre>
+                  </div>
+                ))
+              )}
+            </section>
+            <section>
+              <h3>Datasets activated</h3>
+              {!lineage.datasets?.length ? (
+                <p className="muted">No dataset events recorded.</p>
+              ) : (
+                lineage.datasets.map((entry, i) => (
+                  <div className="finding-row" key={i}>
+                    <strong>{String(entry.name)}</strong>
+                    <p className="muted">{String(entry.timestamp)}</p>
+                  </div>
+                ))
+              )}
+            </section>
+          </div>
+        ) : null}
+
+        {activeTab === 'inference' ? (
+          <div>
+            <h3>Cost &amp; usage (governance budget visibility)</h3>
+            {!lineage.usageSummary?.length ? (
+              <p className="muted">No inference calls recorded yet.</p>
+            ) : (
+              <div className="registry-list">
+                {lineage.usageSummary.map((row) => (
+                  <div className="finding-row" key={row.model}>
+                    <div className="registry-row" style={{ border: 'none', padding: 0 }}>
+                      <div>
+                        <h3>{row.model}</h3>
+                        <p className="muted">{row.calls} call(s)</p>
+                      </div>
+                      <div>
+                        <p className="row-label">Tokens</p>
+                        <strong>
+                          {row.inputTokens} in / {row.outputTokens} out / {row.totalTokens} total
+                        </strong>
+                      </div>
+                      <div>
+                        <p className="row-label">Cost</p>
+                        <strong>
+                          {row.totalCostUsd === null ? 'Unknown (no pricing data)' : `$${row.totalCostUsd.toFixed(6)}`}
+                          {row.costSource ? ` (${row.costSource})` : ''}
+                        </strong>
+                      </div>
+                    </div>
+                    {row.totalCostUsd === null ? (
+                      <CostEstimateForm targetId={detail.target.id} token={token} modelName={row.model} onSubmitted={reload} />
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+            <h3>Inference calls</h3>
+            <p className="muted">Every actual LLM call: what was sent, what came back, how long it took, and what it cost.</p>
+            {!lineage.inferenceCalls?.length ? (
+              <p className="muted">No inference calls recorded yet for this target.</p>
+            ) : (
+              lineage.inferenceCalls.map((call, i) => {
+                const usage = (call.usage || {}) as Record<string, number>;
+                const cost = (call.cost || {}) as Record<string, number>;
+                const params = call.modelParameters as Record<string, unknown> | undefined;
+                const start = call.startTime ? new Date(String(call.startTime)) : null;
+                const end = call.endTime ? new Date(String(call.endTime)) : null;
+                const latencyMs = start && end ? end.getTime() - start.getTime() : null;
+                const level = String(call.level || 'DEFAULT');
+                const logProbs = Array.isArray(call.logProbs) ? (call.logProbs as number[]) : null;
+                const avgLogProb = logProbs?.length ? logProbs.reduce((a, b) => a + b, 0) / logProbs.length : null;
+                return (
+                  <div className="finding-row" key={i}>
+                    <p>
+                      <strong>{String(call.model || 'unknown model')}</strong>
+                      {level !== 'DEFAULT' ? (
+                        <span className={level === 'ERROR' ? 'result-fail' : 'result-pass'} style={{ marginLeft: 8 }}>
+                          {level}
+                        </span>
+                      ) : null}
+                      {' · '}
+                      {start ? start.toLocaleString() : String(call.startTime || '')}
+                      {latencyMs !== null ? ` · ${latencyMs >= 1000 ? `${(latencyMs / 1000).toFixed(2)}s` : `${latencyMs}ms`}` : ''}
+                    </p>
+                    {call.statusMessage ? <p className="muted">Status: {String(call.statusMessage)}</p> : null}
+                    <p className="row-label">Tokens / cost</p>
+                    <p className="muted">
+                      {Number(usage.input || 0)} in / {Number(usage.output || 0)} out / {Number(usage.total || 0)} total
+                      {typeof cost.total === 'number' ? ` · $${cost.total.toFixed(6)}` : ' · cost unknown'}
+                    </p>
+                    {call.finishReason ? (
+                      <p className="muted">
+                        Stopped because: <strong>{String(call.finishReason)}</strong> (natural end, length cap, stop
+                        sequence, or content filter — as reported by the provider itself)
+                      </p>
+                    ) : null}
+                    {avgLogProb !== null ? (
+                      <p className="muted">
+                        Avg. per-token confidence in its own output: <strong>{(Math.exp(avgLogProb) * 100).toFixed(1)}%</strong>{' '}
+                        (real per-token logprob from the provider, averaged over {logProbs!.length} tokens — not an
+                        estimate)
+                      </p>
+                    ) : null}
+                    {params && Object.keys(params).length ? (
+                      <details>
+                        <summary>Model / sampling parameters</summary>
+                        <pre className="config-preview">{JSON.stringify(params, null, 2)}</pre>
+                      </details>
+                    ) : null}
+                    <details>
+                      <summary>Full prompt sent (input)</summary>
+                      <pre className="config-preview">
+                        {typeof call.input === 'string' ? call.input : JSON.stringify(call.input, null, 2)}
+                      </pre>
+                    </details>
+                    <details>
+                      <summary>Full response received (output)</summary>
+                      <pre className="config-preview">
+                        {typeof call.output === 'string' ? call.output : JSON.stringify(call.output, null, 2)}
+                      </pre>
+                    </details>
+                    {call.rawResponse !== undefined && call.rawResponse !== null ? (
+                      <details>
+                        <summary>Full raw provider response (everything the provider returned, unparsed)</summary>
+                        <pre className="config-preview">
+                          {typeof call.rawResponse === 'string' ? call.rawResponse : JSON.stringify(call.rawResponse, null, 2)}
+                        </pre>
+                      </details>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+            <h3>Retrieval contexts (RAG)</h3>
+            <p className="muted">What was searched for, and exactly what context came back to be fed into the prompt.</p>
+            {!lineage.retrievalContexts?.length ? (
+              <p className="muted">No retrieval-context observations recorded (either not a RAG target, or no test rows carried retrieved context).</p>
+            ) : (
+              lineage.retrievalContexts.map((entry, i) => {
+                const query = (entry.input as Record<string, unknown> | undefined)?.query;
+                return (
+                  <div className="finding-row" key={i}>
+                    {query ? <p className="muted">Query: {String(query)}</p> : null}
+                    <details>
+                      <summary>Full retrieved context (fed into the prompt)</summary>
+                      <pre className="config-preview">
+                        {typeof entry.output === 'string' ? entry.output : JSON.stringify(entry.output, null, 2)}
+                      </pre>
+                    </details>
+                  </div>
+                );
+              })
+            )}
+            <h3>Tool calls (agent)</h3>
+            <p className="muted">
+              Tools the model requested during a run. This product records the model's intent to call a tool (name +
+              arguments) for lineage purposes — it does not execute the tool itself, so no result/output is recorded here.
+            </p>
+            {!lineage.toolCalls?.length ? (
+              <p className="muted">No tool-call observations recorded (either not an agent target, or no tool calls were made).</p>
+            ) : (
+              lineage.toolCalls.map((entry, i) => (
+                <div className="finding-row" key={i}>
+                  <strong>{String(entry.name)}</strong>
+                  <details>
+                    <summary>Full arguments</summary>
+                    <pre className="config-preview">
+                      {typeof entry.input === 'string' ? entry.input : JSON.stringify(entry.input, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              ))
+            )}
+          </div>
+        ) : null}
+
+        {activeTab === 'evidence' ? (
+          <div>
+            <h3>Runs (red-team / eval / model-audit / CyberSecEval)</h3>
+            {!lineage.runs?.length ? (
+              <p className="muted">No stage runs recorded yet.</p>
+            ) : (
+              lineage.runs.map((run, i) => (
+                <div className="finding-row" key={i}>
+                  <p>
+                    <strong>{String(run.stageKey)}</strong> · {String(run.timestamp)} · triggered by {String(run.triggeredBy || 'manual')}
+                  </p>
+                  {run.assuranceEvidence ? (
+                    <p className="muted">{JSON.stringify(run.assuranceEvidence)}</p>
+                  ) : null}
+                </div>
+              ))
+            )}
+            <h3>Evidence exports</h3>
+            {!lineage.exports?.length ? (
+              <p className="muted">No evidence exports recorded yet.</p>
+            ) : (
+              lineage.exports.map((entry, i) => (
+                <div className="finding-row" key={i}>
+                  <strong>{String(entry.format || entry.name)}</strong>
+                  <p className="muted">{String(entry.timestamp)}</p>
+                </div>
+              ))
+            )}
+            <h3>Governance scores</h3>
+            {!lineage.governanceScores?.length ? (
+              <p className="muted">No scores recorded yet — select a node in the Graph tab to add a human governance sign-off.</p>
+            ) : (
+              lineage.governanceScores.map((score) => (
+                <div className="finding-row" key={score.id}>
+                  <p>
+                    <strong>{score.name}</strong>: {String(score.value)} · {score.timestamp}
+                  </p>
+                  {score.comment ? <p className="muted">{score.comment}</p> : null}
+                </div>
+              ))
+            )}
+            <h3>Human review queue</h3>
+            {!reviewQueue.length ? (
+              <p className="muted">Nothing flagged for review — select a trace in the Graph tab to flag it.</p>
+            ) : (
+              reviewQueue.map((item) => (
+                <div className="finding-row" key={item.id}>
+                  <p>
+                    <strong>{item.status}</strong> · trace {item.objectId.slice(0, 8)}... · flagged {item.createdAt}
+                  </p>
+                  {item.status === 'PENDING' ? (
+                    <button className="secondary-button" type="button" onClick={() => handleMarkReviewed(item.id)}>
+                      Mark reviewed
+                    </button>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 function EvidenceWorkspace({
   detail,
   token,
@@ -3821,9 +4813,9 @@ function EvidenceWorkspace({
             <div>
               <h3>Framework Compliance</h3>
               <p className="muted">
-                Control-level mapping from red-team results to ISO 42001, EU AI Act, NIST AI RMF, OWASP LLM/API/Agentic
-                Top 10, MITRE ATLAS, GDPR, and DoD AI Ethics — computed from every red-team run this target has, not
-                just the latest one.
+                Control-level mapping from red-team results — and from CyberSecEval benchmark results run through the
+                eval workspace — to ISO 42001, EU AI Act, NIST AI RMF, OWASP LLM/API/Agentic Top 10, MITRE ATLAS, GDPR,
+                and DoD AI Ethics — computed from every run this target has, not just the latest one.
               </p>
             </div>
             {report?.frameworkCompliance ? (
@@ -3836,8 +4828,8 @@ function EvidenceWorkspace({
             ) : null}
           </div>
           {report?.frameworkCompliance ? (
-            report.frameworkCompliance.redTeamRunsConsidered === 0 ? (
-              <p className="muted">No red-team runs yet for this target — run red-team to populate framework compliance evidence.</p>
+            report.frameworkCompliance.redTeamRunsConsidered === 0 && report.frameworkCompliance.cyberSecEvalRunsConsidered === 0 ? (
+              <p className="muted">No red-team or CyberSecEval runs yet for this target — run red-team, or run an eval with a CyberSecEval dataset activated, to populate framework compliance evidence.</p>
             ) : (
               <div className="drilldown-list">
                 {Object.values(report.frameworkCompliance.frameworks).map((fw) => {
@@ -3932,6 +4924,11 @@ function EvidenceWorkspace({
                       {finding.strategyApproximated ? (
                         <span className="pill pill-muted" title="This strategy is normally a stateful/multi-turn attack upstream; approximated here as a single self-hosted transform">
                           strategy approximated
+                        </span>
+                      ) : null}
+                      {finding.cyberSecEval ? (
+                        <span className="pill pill-muted" title={`Forked from ${finding.cyberSecEval.source} — never fetched at runtime, vendored into datasets/cyberseceval/`}>
+                          {finding.cyberSecEval.benchmark}
                         </span>
                       ) : null}
                     </button>
@@ -4440,7 +5437,7 @@ function TargetDetailPage({
   }, [detail.target.id, detail.target.updatedAt]);
 
   useEffect(() => {
-    if (activeStage === 'evidence') return;
+    if (activeStage === 'evidence' || activeStage === 'lineage') return;
     const loader =
       activeStage === 'eval'
         ? listEvalRuns(token, detail.target.id)
@@ -4450,7 +5447,7 @@ function TargetDetailPage({
       .catch(() => setStageRuns((current) => ({ ...current, [activeStage]: [] })));
   }, [activeStage, detail.target.id, token]);
 
-  async function refreshRuns(stageKey: ExecutableStageKey = activeStage === 'evidence' ? 'eval' : activeStage, updated = detail) {
+  async function refreshRuns(stageKey: ExecutableStageKey = activeStage === 'evidence' || activeStage === 'lineage' ? 'eval' : activeStage, updated = detail) {
     const payload =
       stageKey === 'eval'
         ? await listEvalRuns(token, updated.target.id)
@@ -5008,6 +6005,23 @@ function TargetDetailPage({
             </button>
           </div>
         </article>
+        <article className="stage-card">
+          <div className="stage-head">
+            <div>
+              <h2>Lineage</h2>
+              <p className="muted">
+                AI supply-chain lineage: model provenance, prompt versions, datasets, and every run/inference call.
+              </p>
+            </div>
+            <span className="badge">lineage</span>
+          </div>
+          <p className="ready-text">Available</p>
+          <div className="stage-actions">
+            <button className="secondary-button" type="button" onClick={() => goToStage('lineage')}>
+              Open workspace
+            </button>
+          </div>
+        </article>
       </div>
       <section className="panel">
         <p className="eyebrow">Workspace</p>
@@ -5018,7 +6032,9 @@ function TargetDetailPage({
               ? 'Red team workspace'
               : activeStage === 'model_audit'
                 ? 'Model audit workspace'
-                : 'Evidence workspace'}
+                : activeStage === 'lineage'
+                  ? 'Lineage workspace'
+                  : 'Evidence workspace'}
         </h2>
         <StageWorkspace
           detail={detail}
@@ -5027,10 +6043,10 @@ function TargetDetailPage({
           providerGroups={providerGroups}
           workflowCatalog={workflowCatalog}
           isViewer={isViewer}
-          runs={activeStage === 'evidence' ? [] : stageRuns[activeStage]}
+          runs={activeStage === 'evidence' || activeStage === 'lineage' ? [] : stageRuns[activeStage]}
           onRefresh={async (updated) => {
             onRefresh(updated);
-            if (activeStage !== 'evidence') {
+            if (activeStage !== 'evidence' && activeStage !== 'lineage') {
               await refreshRuns(activeStage, updated);
             }
           }}
@@ -5061,6 +6077,10 @@ function StageWorkspace({
 }) {
   if (activeStage === 'evidence') {
     return <EvidenceWorkspace detail={detail} token={token} isViewer={isViewer} onRefresh={onRefresh} />;
+  }
+
+  if (activeStage === 'lineage') {
+    return <LineageWorkspace detail={detail} token={token} />;
   }
 
   if (activeStage === 'eval') {
@@ -5620,7 +6640,14 @@ function App() {
 
   if (!catalog) {
     return (
-      <Shell onRegistry={goRegistry} onLogout={handleLogout}>
+      <Shell
+      onRegistry={goRegistry}
+      onOnboard={goOnboard}
+      isAdmin={user.role === 'admin'}
+      view={view}
+      user={user}
+      onLogout={handleLogout}
+    >
         <section className="panel">
           <p className="muted">Loading registry...</p>
         </section>
@@ -5631,9 +6658,12 @@ function App() {
   return (
     <Shell
       onRegistry={goRegistry}
+      onOnboard={goOnboard}
       onUsers={goUsers}
       onTokens={goTokens}
       isAdmin={user.role === 'admin'}
+      view={view}
+      user={user}
       onLogout={handleLogout}
     >
       {view === 'registry' ? (

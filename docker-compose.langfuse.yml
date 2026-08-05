@@ -1,0 +1,195 @@
+# Self-hosted Langfuse (forked, see langfuse-source/PROVENANCE.md) — the backing store for this
+# product's lineage capability. Built from the vendored source, not pulled as a prebuilt image, so
+# what actually runs is the exact code this repo owns and has reviewed (CSP hardened, ee/ present
+# but never license-keyed, telemetry disabled — see langfuse-source/PROVENANCE.md).
+#
+# Reuses this product's EXISTING `postgres` service (docker-compose.yml) for Langfuse's
+# transactional data, isolated into its own Postgres schema (`langfuse`, via the `?schema=`
+# connection param Prisma supports) — this product's own `public`-schema tables are untouched.
+# ClickHouse, Redis, and MinIO are new infrastructure this capability requires; see
+# HANDOVER.md for why (Langfuse's own architecture, not something this product can avoid).
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.langfuse.yml up -d
+#
+# Langfuse's own web UI (port 3300 here) is intentionally bound to localhost only and never
+# linked from this product's frontend — it is infrastructure this product's own UI queries via
+# its API, not a second product surface an auditor is meant to visit. See EVIDENCE.md for the
+# lineage capability's live verification.
+services:
+  langfuse-schema-init:
+    image: docker.io/postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-open_governance}
+    entrypoint:
+      - sh
+      - -c
+      - >
+        psql -h postgres -U ${POSTGRES_USER:-open_governance} -d ${POSTGRES_DB:-open_governance3}
+        -c "CREATE SCHEMA IF NOT EXISTS langfuse;"
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12
+    container_name: open-governance3-langfuse-clickhouse
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-langfuse_clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-change-this-clickhouse-password}
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - 127.0.0.1:8123:8123
+      - 127.0.0.1:9100:9000
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  langfuse-redis:
+    image: docker.io/redis:7
+    container_name: open-governance3-langfuse-redis
+    restart: always
+    command: >
+      --requirepass ${LANGFUSE_REDIS_AUTH:-change-this-redis-password}
+      --maxmemory-policy noeviction
+    ports:
+      - 127.0.0.1:6390:6379
+    volumes:
+      - langfuse_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  # Self-hosted S3-compatible object storage (MinIO) — never AWS S3 or any external object store,
+  # per this capability's zero-external-hosted-call requirement.
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    container_name: open-governance3-langfuse-minio
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-langfuse_minio}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:-change-this-minio-password}
+    ports:
+      - 127.0.0.1:9190:9000
+      - 127.0.0.1:9191:9001
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  langfuse-web:
+    build:
+      context: ./langfuse-source
+      dockerfile: ./web/Dockerfile
+    container_name: open-governance3-langfuse-web
+    restart: always
+    depends_on: &langfuse-depends-on
+      postgres:
+        condition: service_healthy
+      langfuse-schema-init:
+        condition: service_completed_successfully
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+    ports:
+      # Bound to localhost only — this product's server.cjs (also on the host) reaches it via
+      # localhost; end users are never routed here. See PROVENANCE.md's CSP note.
+      - 127.0.0.1:3300:3000
+    environment: &langfuse-env
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: ${LANGFUSE_DATABASE_URL:-postgresql://open_governance:open_governance@postgres:5432/open_governance3?schema=langfuse}
+      DIRECT_URL: ${LANGFUSE_DATABASE_URL:-postgresql://open_governance:open_governance@postgres:5432/open_governance3?schema=langfuse}
+      NEXTAUTH_URL: http://localhost:3300
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-change-this-nextauth-secret}
+      SALT: ${LANGFUSE_SALT:-change-this-salt}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      # Disables Langfuse's periodic PostHog telemetry job outright (see PROVENANCE.md) —
+      # verified in web/src/features/telemetry/index.ts to fully short-circuit the cron job.
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      # This integration uses Langfuse's documented (if now-deprecated-in-favor-of-OTel) JSON
+      # batch ingestion endpoint (POST /api/public/ingestion) with trace-create/span-create/
+      # generation-create/etc. event types — v4's default write mode (events_only) rejects those
+      # event types outright ("Event type not accepted... this endpoint only accepts score and
+      # log events"), found live while first smoke-testing ingestion. legacy mode keeps full
+      # acceptance of every event type this product's lineage.cjs emits, and keeps the legacy
+      # sessions/traces query API (also used here) reading from the tables legacy mode writes to.
+      # Own self-hosted deployment, own configuration choice — see PROVENANCE.md.
+      LANGFUSE_MIGRATION_V4_WRITE_MODE: legacy
+      # Required alongside WRITE_MODE=legacy — the default (direct) OTel behavior targets a table
+      # legacy mode doesn't read, and Langfuse's own startup validation hard-errors on that
+      # combination.
+      LANGFUSE_MIGRATION_V4_NATIVE_OTEL_BEHAVIOUR: dual_write
+      # Never set: LANGFUSE_EE_LICENSE_KEY — keeps every Enterprise-gated feature inert (see
+      # PROVENANCE.md). Never set: NEXT_PUBLIC_SENTRY_DSN — keeps the Sentry SDK a no-op.
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: ${LANGFUSE_CLICKHOUSE_USER:-langfuse_clickhouse}
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-change-this-clickhouse-password}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse_minio}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:-change-this-minio-password}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse_minio}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:-change-this-minio-password}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9190
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:-change-this-redis-password}
+      REDIS_TLS_ENABLED: "false"
+      # Auto-provisions an org/project/user/API-key pair on first boot — idempotent (upsert), so
+      # this product's server can talk to a known, fixed API key pair with zero manual UI
+      # click-through. See langfuse-source/web/src/initialize.ts.
+      LANGFUSE_INIT_ORG_ID: og3
+      LANGFUSE_INIT_ORG_NAME: "Open Governance3"
+      LANGFUSE_INIT_PROJECT_ID: og3-lineage
+      LANGFUSE_INIT_PROJECT_NAME: "Open Governance3 Lineage"
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-og3-lineage-0000000000000000}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-og3-lineage-change-this-secret}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-lineage-system@open-governance3.local}
+      LANGFUSE_INIT_USER_NAME: "Open Governance3 Lineage System"
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-change-this-init-user-password}
+
+  langfuse-worker:
+    build:
+      context: ./langfuse-source
+      dockerfile: ./worker/Dockerfile
+    container_name: open-governance3-langfuse-worker
+    restart: always
+    depends_on: *langfuse-depends-on
+    ports:
+      - 127.0.0.1:3330:3030
+    environment:
+      <<: *langfuse-env
+
+volumes:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_redis_data:
+  langfuse_minio_data:

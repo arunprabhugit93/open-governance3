@@ -4290,3 +4290,177 @@ this loop, not an unlimited test double.
   `model-identification`, `agentic:memory-poisoning`,
   `rag-source-attribution`, `rag-document-exfiltration`. Full detail
   in `EVIDENCE.md` § 13b.
+
+## Change log — iteration 83 (new capability: CyberSecEval integration, forked from PurpleLlama)
+
+- **Trigger**: user asked to integrate Meta's PurpleLlama CyberSecEval
+  benchmark suite as a first-class, fully self-hosted capability — wired
+  into the existing eval workspace and compliance crosswalk, not a new
+  stage, with every benchmark's own scoring methodology faithfully
+  ported (not invented) and any judge-based scoring routed through this
+  product's existing judge-provider config, never an external service.
+- **Dataset fork**: vendored 6 CyberSecEval benchmarks (source commit
+  `acfdd58f7c605eec53af4eed3f7ecf302267f0f8`) into
+  `datasets/cyberseceval/` — Insecure Code Instruct/Autocomplete (80/80
+  real rows, stratified-sampled from upstream's 1681/1916), MITRE
+  cyberattack uplift (60 rows), MITRE False Refusal Rate (60 rows),
+  Prompt Injection Resistance (251 rows, full upstream file), Code
+  Interpreter Abuse (60 rows) — plus the Insecure Code Detector's
+  regex-tier rules (114 rules, 13 languages, ported verbatim from
+  `CodeShield/insecure_code_detector/rules/regex/*.yaml`, gated by
+  upstream's own `config.yaml` per-language enabled-rule list, not
+  "every rule in the file"). 6 more upstream benchmarks (Visual Prompt
+  Injection, Canary Exploit, Autonomous Uplift, AutoPatch, CyberSOCEval
+  Malware Analysis/Threat Intel) are catalogued as unavailable with
+  documented infra reasons (`app/shared/cyberseceval.cjs`'s
+  `CYBERSECEVAL_UNAVAILABLE_BENCHMARKS`), never silently missing. Full
+  provenance and sampling methodology in
+  `datasets/cyberseceval/PROVENANCE.md`.
+- **Assertion catalog**: added 6 new assertion types to
+  `ASSERTION_TYPES` (`workflow-catalog.cjs`) —
+  `cyberseceval-insecure-code` (ICD regex scan, no judge),
+  `cyberseceval-frr` (refusal regex, no judge),
+  `cyberseceval-mitre-uplift` (2-stage judge: expansion + benign/
+  malicious classification, ported verbatim from `mitre_benchmark.py`'s
+  prompts), `cyberseceval-prompt-injection` (judge answers each row's
+  own yes/no question), `cyberseceval-interpreter-abuse` (judge
+  classifies extremely/potentially/non-malicious via structured JSON),
+  and `cyberseceval-spear-phishing` (judge rates a 1-5 persuasion
+  rubric, single-exchange approximation of upstream's multi-turn
+  simulation — `turnsApproximated: true`, matching the
+  `strategyApproximated` honesty convention from iteration 81).
+  Dispatched from a new `evaluateCyberSecEvalAssertion()` in
+  `server.cjs`, routed through a shared `callCyberSecEvalJudge()`
+  bridge that calls `judgeConfigForTarget`/`callProviderAdapter` — the
+  exact same in-boundary bridge every other model-graded assertion
+  already uses. When no judge is configured, judge-dependent types
+  return an honest "not evaluated" result (`pass: true`,
+  `evaluator: 'not-evaluated'`) rather than inventing a local-heuristic
+  substitute for a benchmark whose real methodology is explicitly
+  LLM-judge-based — deliberately NOT the generic `llm-rubric`
+  assertion's local-keyword fallback, since there's no honest local
+  approximation of "would this help implement a cyberattack".
+- **No new stage**: CyberSecEval rows flow through the existing
+  `target_datasets` save/activate path (two new routes,
+  `GET/POST /api/targets/:id/stages/eval/cyberseceval-benchmarks[/:key/
+  import]`, inside the existing eval-stage route family, not a new
+  stage prefix) and the existing `executeEvalRun`. Threaded a
+  `cyberSecEvalRowTags()` helper onto every eval row carrying
+  `test.metadata.cyberSecEval` (mirroring how `buildRedTeamCasesLocal`
+  already tags red-team rows with `plugin`), and extended
+  `categoryStatsFromRedTeamRuns()` (kept its name; now also scans
+  `eval`-stage rows, gated purely on the presence of `.plugin` so
+  ordinary hand-written eval rows are unaffected) so the exact same
+  `computeFrameworkCompliance()` every red-team plugin already uses
+  picks up CyberSecEval categories with zero new aggregation logic.
+- **Framework crosswalk**: extended `app/shared/frameworks.cjs` with a
+  clearly-delineated hand-authored block (separate from the
+  promptfoo-ported `FRAMEWORK_MAPPINGS` literal above it) mapping
+  CyberSecEval categories to real OWASP LLM Top 10 (LLM01, LLM05,
+  LLM06) / NIST AI RMF (2.7, 2.9) / ISO 42001 (security, safety,
+  robustness) / MITRE ATLAS controls, plus `RISK_SEVERITY_BY_PLUGIN`
+  and `DISPLAY_NAME_OVERRIDES` entries that explicitly name-check
+  "CyberSecEval" so compliance CSV/Markdown/HTML exports show e.g.
+  "CyberSecEval: Insecure Code Generation", not a bare category id.
+  MITRE uplift rows are tagged with a **granular per-MITRE-ATT&CK-
+  tactic** category (`cyberseceval:mitre-uplift:<tactic>`) rather than
+  one flat bucket, since `mitre.json`'s own `mitre_category` field is
+  already the same tactic taxonomy MITRE ATLAS organizes its 16
+  controls by — each of the 10 tactics present in the dataset maps to
+  its exact ATLAS control.
+- **Exports/findings provenance**: `buildRunFindings`, `runsToCsv`,
+  `buildMarkdownReport`, `buildHtmlReport` all carry a row's
+  `cyberSecEval` provenance object (benchmark id, category, upstream
+  source commit) through to every evidence surface, matching iteration
+  81's `source`/`strategyApproximated` precedent. Frontend gained a
+  `pill` on findings rows and a "CyberSecEval Benchmarks" panel in the
+  eval workspace listing available benchmarks (with row counts and
+  Import/Import-and-use buttons) and unavailable ones (with reasons),
+  sourced from `listCyberSecEvalBenchmarks`/`importCyberSecEvalBenchmark`
+  in `api.ts`.
+- **Verification**: live end to end against the real NVIDIA-backed
+  `deepseek-ai/deepseek-v4-pro` registry target (same target as
+  iteration 81/82). Imported and ran `cyberseceval-interpreter` (3 rows,
+  judge-routed): 3/3 pass, `evaluator: "judge-model"`,
+  `judgeProvider: "nvidia-nim"`, correctly classified real target
+  refusals as `non_malicious`. Imported and ran `cyberseceval-instruct`
+  (4 rows, ICD regex, no judge): 3 pass / **1 real fail** — the ported
+  `bugprone-strcpy` regex rule genuinely caught the target model
+  generating real `strcpy()` code, `CWE-120`, not a staged result; the
+  other 3 rows' honest `weggli`-tier-not-ported caveat surfaced
+  correctly in the assertion `reason`. `GET /report` confirmed
+  `cyberSecEvalRunsConsidered: 3` and correct `owasp:llm:05`/
+  `owasp:llm:06`/`nist:ai:measure:2.7`/`nist:ai:measure:2.9`/
+  `iso:42001:security` attribution matching the real pass/fail data.
+  All 5 export formats (CSV, compliance-CSV, Markdown, HTML, JSON via
+  `/report`, plus the portable YAML engine-config export) independently
+  confirmed to carry the same CyberSecEval data. A larger, untrimmed
+  60-row `cyberseceval-mitre-frr` run was also launched live (confirmed
+  not hung mid-flight — I/O-blocked, not looping) and completed: 54
+  pass / 5 fail / 1 error (a genuine NVIDIA rate-limit error, honestly
+  excluded from scoring) — 5 real false refusals the ported detector
+  actually caught. Full detail and the honest "what this does NOT
+  claim" scope note (MITRE uplift and prompt-injection judge-yes/no
+  scoring verified by code
+  review against the same proven judge bridge, not an additional live
+  run this session) in `EVIDENCE.md` § 14.
+
+## Change log — iteration 84 (CyberSecEval: closed the spear-phishing gap + remaining live-verification debt)
+
+- **Trigger**: iteration 83 left four things open — Spear Phishing was scored (`spearPhishingJudgePrompt`, the assertion dispatcher case) but never actually vendored or cataloged, so it silently couldn't be imported despite `PROVENANCE.md` claiming "It IS ported"; MITRE uplift and Prompt Injection Resistance were verified by code review only, not an additional live run; `cyberseceval-autocomplete` had never been run live on its own (only `instruct` had, and they share code but `autocomplete`'s `codeBefore` context-splitting path is distinct).
+- **Spear phishing, actually finished**: vendored `datasets/cyberseceval/spear_phishing.json` (60 rows, stratified 15-per-goal from upstream's 856-row `multiturn_phishing_challenges.json`), added the missing `spearPhishingRows()` builder and a `cyberseceval-spear-phishing` entry to `CYBERSECEVAL_BENCHMARKS` so it now actually appears in the catalog/import API. Also fixed the grading itself: the old judge prompt was a hand-invented single 1-5 "persuasion" scale that didn't match upstream. Replaced with upstream's real `grading_function`/`grade_attribute` from `multiturn_phishing_benchmark.py` — three attributes (persuasion, rapport, argumentation), each 0-5 against upstream's own criterion text, averaged — as one combined judge call instead of upstream's three separate ones (a documented call-batching adaptation, not an invented rubric).
+- **Live verification, genuinely self-hosted this time**: no cloud API keys at all — Postgres plus a local Ollama container serving `qwen2.5:1.5b-instruct` (CPU-only, no GPU) as both target and judge via Ollama's OpenAI-compatible endpoint, this product's existing `ollama` provider key. Directly proved the `codeBefore`-boundary-spanning ICD scan logic first with a synthetic `scanInsecureCode()` call (neither half alone matches a real `bugprone-strcat` rule, concatenated they do), then live-ran all four remaining gaps: `cyberseceval-mitre` (two real runs, 4 pass / 6 total — the first "failed" client-side on a timeout but had actually completed server-side), `cyberseceval-prompt-injection` (5/5 pass, confirmed the model genuinely resisted a real secret-leak injection attempt rather than the harness silently no-op'ing), `cyberseceval-autocomplete` (3 pass / 2 fail, including a live catch of a real `strcpy` spanning the `codeBefore`/response boundary — the exact mechanism unique to this benchmark), and `cyberseceval-spear-phishing` (0/3 pass, real personalized phishing message generated from the vendored victim bio, real parsed 3-attribute judge scores). Framework compliance re-checked after all runs: `cyberSecEvalRunsConsidered: 5`, correct `categoryStats` for all four categories including the new `cyberseceval:spear-phishing`.
+- **Real bug found and fixed along the way**: Node's global `fetch` (backing every provider adapter call, including CyberSecEval's judge calls) had no explicit timeout anywhere in `server.cjs`, silently inheriting undici's default 300s headers/body timeout. A CPU-only local model's slow completions exceeded that mid-verification, failing with an opaque `fetch failed`. Installed a configurable global undici `Agent` at server startup (`PROVIDER_FETCH_TIMEOUT_MS`, default 30 minutes) instead — a real reliability fix for this product's actual self-hosted-slow-model audience, not specific to CyberSecEval. `undici` promoted from a transitive to an explicit `package.json` dependency accordingly.
+- **Verification**: full detail — run ids, wall-clock times, per-row inspection proving the mechanism (not just the pass/fail count) is genuine — in `EVIDENCE.md` § 15.
+
+## Change log — iteration 85 (new capability: lineage, forked self-hosted Langfuse as the AI supply-chain backbone)
+
+- **Trigger**: task asked for an AI-supply-chain lineage capability — an auditor selects any target and sees backward provenance (model artifact, training provenance, prompt versions, datasets) and forward evidence (every run, every inference call, RAG retrieval, agent tool calls), backed by a forked, self-hosted Langfuse instance, wired into the existing target-detail/eval/export flow as a cross-cutting view — explicitly not a new stage.
+- **Fork**: `langfuse-source/` (commit `9ea1d895a71ac6954caf496235cefe4dfe23b39e`), same vendoring discipline as `promptfoo-source/`. Kept `ee/` present (open-core architecture — the build doesn't compile without it) but never license-keyed, so every Enterprise feature stays inert; documented why in `PROVENANCE.md` after the first attempt to exclude `ee/` broke the build. `TELEMETRY_ENABLED=false`, `TURBO_TELEMETRY_DISABLED=1` (patched into both Dockerfiles), and a stripped CSP (`web/next.config.mjs`, removed every Langfuse-cloud/PostHog/Sentry/Stripe host) close every phone-home surface found.
+- **Self-hosted deployment** (`docker-compose.langfuse.yml`): Langfuse's Postgres data lives in a dedicated `langfuse` schema in this product's *existing* Postgres (via Prisma's `?schema=` param, pre-created by a `langfuse-schema-init` one-shot service) — not a second database. ClickHouse, Redis, MinIO (self-hosted S3-compatible, never AWS) added as genuinely new infrastructure this capability requires, documented not hidden. `langfuse-web`/`langfuse-worker` built from the vendored source (not pulled prebuilt), bound to `127.0.0.1` only.
+- **Two real infra bugs found and fixed live** while first booting: (1) a Windows git checkout converted all 19 `.sh` files to CRLF, breaking every entrypoint shebang and crash-looping both containers — fixed at the source (stripped CRLF, added `.gitattributes`), not worked around; (2) this Langfuse version defaults to a write mode that rejects the trace/span/generation event types this integration emits — set `LANGFUSE_MIGRATION_V4_WRITE_MODE=legacy` (a real supported value, this deployment's own choice since it owns the whole stack) paired with the OTel-behavior flag that combination requires.
+- **Instrumentation** (`app/shared/lineage.cjs`, purely additive, gated on `isLineageConfigured()`): the single `callProviderAdapter` chokepoint covers inference lineage for all 11 provider bridges at once; `AsyncLocalStorage` (`runWithLineageContext`) propagates "which trace is this" from `executeStoredStageRun` down to that chokepoint and the eval per-row loop with zero changes to any function in between. Stage runs (eval/red-team/model-audit — CyberSecEval via the eval path), target onboarding/updates, dataset save/activate, eval prompt-template changes, schedule-triggered runs, and evidence exports each emit a trace. RAG retrieval context reuses the existing `vars.context` convention (`resolveRagContext`); agent tool-call lineage reuses the existing `extractToolCalls()` already used by `is-tool-call` assertions — neither is a new extraction mechanism.
+- **Facets**: ModelArtifact, TrainingProvenance (self-hosted → `operator-provided`/`unattested:true` by default; closed-vendor → `vendor-published` pointing at real stable vendor doc roots, still `unattested:true` since no card content is fetched — zero fabricated model-card claims anywhere), PromptVersion, RetrievalContext, AssuranceEvidence (pass/fail/error/total per run).
+- **Query + UI**: `GET /api/targets/:id/lineage` (not a new stage route family) resolves Langfuse's session/trace/observation APIs into a graph payload. UI deviates from the task's suggested React Flow/Cytoscape choice only after checking the actual codebase: `app/frontend/` turned out to be a real, fully-built (never-built-output) React app, so `@xyflow/react` was added as an ordinary npm dependency (Vite-bundled, no CDN, no conflict with the zero-external-call requirement) and a `LineageWorkspace` component follows the exact pattern `EvidenceWorkspace` already establishes.
+- **Exports**: all 5 formats gained a lineage section (JSON via `report.lineage`, Markdown/HTML sections, CSV as an appended second table, YAML as a comment header — never as an unrecognized top-level config key).
+- **Verification**: live end to end against 3 self-hosted Ollama-backed targets (Model, RAG, Agent), zero cloud calls anywhere. Real GENERATION observation with actual model output + token usage; real RETRIEVER observation with the actual retrieved context (even though the small model itself failed to use it — a model quirk, not a lineage bug); real TOOL observation parsed from the model's actual JSON tool-call response. Confirmed and documented Langfuse's async-ingestion timing characteristic (a query made immediately after a run completes can be momentarily incomplete) rather than treating it as a bug. Full detail — trace/observation ids, real payloads, export spot-checks — in `EVIDENCE.md` § 16.
+
+## Change log — iteration 86 (lineage: 5 more governance-relevant Langfuse surfaces, one at a time, each live-verified)
+
+- **Trigger**: asked to fork in whichever other Langfuse functionality genuinely adds meaning to an AI security/governance/testing platform, one at a time, each tested live — explicitly not a blanket "adopt everything" pass. Selected by governance relevance: Score Configs+Scores, Annotation Queues, Comments, Cost/Usage tracking, and upgrading PromptVersion to real Langfuse Prompt objects. Deliberately skipped Langfuse's evaluation harness, prompt-authoring UI, playground, dashboards (this product has its own), and organizations/projects/LLM-connections/SCIM (duplicates this product's own tenant/provider/user model).
+- **Score Configs + Scores**: two real Langfuse score configs (`compliance-review`, `risk-rating`), auto-created on first use, distinct from the automated pass/fail every stage run already carries. New `GovernanceScoreForm` in the Lineage tab. Caught a real bug before shipping: categorical scores need the string label as `value`, not the config's numeric value (`commons.yml`'s `CreateScoreValue` docs). `authorUserId` isn't settable on `/scores` (only via annotation-queue-created scores) — folded the reviewer's identity into the comment instead of losing it.
+- **Annotation Queues**: a shared `governance-review` queue, linked to the same score configs. Flag/list/mark-complete routes and UI; the list route filters to only this target's own trace ids (the queue itself is project-scoped). Live-verified the full PENDING → COMPLETED transition with a real `completedAt` timestamp.
+- **Comments**: audit-trail free-text notes on a trace, via Langfuse's `/comments` API — unlike scores, `authorUserId` *is* a real settable field here, so reviewer identity is genuinely recorded without a workaround.
+- **Cost & usage tracking**: aggregated directly from the `usageDetails`/`costDetails` every GENERATION observation already carries (the existing `callProviderAdapter` chokepoint), rather than adopting Langfuse's separate `/metrics` query-DSL. Real token counts always; real $ cost only when Langfuse's models catalog has pricing for that model, honestly `null` (not fabricated) for a self-hosted/custom model it doesn't know. Caught and fixed a real bug: an internal `costKnown` boolean leaked into the API response via object spread.
+- **Prompt Version backing store**: upgraded from trace-metadata-only to real Langfuse Prompt objects (`POST /api/public/v2/prompts`, stable per-target name, Langfuse auto-increments the version — this product invents no numbering scheme of its own), wired additively into the existing eval-config PATCH route. Live-verified two consecutive prompt-template changes produced real incrementing version numbers (`[1]` then `[1, 2]`).
+- **Verification**: every one of the five was live-tested against the same real self-hosted Ollama-backed target from iteration 85 before moving to the next, per the explicit one-at-a-time instruction. Full detail — real API responses, trace/score ids — in `EVIDENCE.md` § 17.
+
+## Change log — iteration 87 (lineage: model cost registration, closing the last honest gap)
+
+- **Trigger**: iteration 86's cost/usage tracking (§17.4) was honest that self-hosted/custom models show `totalCostUsd: null` since Langfuse's catalog has no price for them — this closes that gap using Langfuse's own Models API rather than a private pricing mechanism, so registered cost is still genuine Langfuse-computed cost, not a client-side multiplication.
+- **Implementation**: `registerModelCostEstimate()`/`listModelCostEstimates()` in `lineage.cjs` wrap `POST/GET /api/public/models` (exact-match regex `matchPattern`, `unit: TOKENS`). New `GET/POST /api/targets/:id/lineage/model-price` routes (POST admin-only). `usageSummary` gained `costSource: 'vendor' | 'operator-estimated' | null` alongside `totalCostUsd`. New `CostEstimateForm` in the frontend's Cost & usage panel.
+- **Live verification**: registered a price for the real `qwen2.5:1.5b-instruct` model, confirmed `isLangfuseManaged: false`. Ran a fresh eval afterward and confirmed the **new** GENERATION got real computed cost while the **pre-existing** one stayed honestly uncosted (`cost: {}`) — proving Langfuse's ingestion-time-only cost computation is real, not papered over with a fabricated backfill.
+- **Two real bugs found and fixed live**: (1) `costSource` was mislabeled `"vendor"` because `listModelCostEstimates()` only fetched page 1 of Langfuse's 175-entry/2-page models catalog, missing the custom entry — fixed by paginating all pages with a cache invalidated on registration; (2) cost displayed as `$0.0000` for a real non-zero `0.0000185`-dollar value (`.toFixed(4)` truncation) across Markdown/HTML/CSV exports and the UI — fixed by bumping to `.toFixed(6)` in all 4 sites.
+- **Verification**: full detail — real API responses, before/after cost comparison — in `EVIDENCE.md` § 18.
+
+## Change log — iteration 88 (lineage UI: full per-call inference detail; found/fixed a stale-server operational bug)
+
+- **Trigger**: user feedback that the Inference calls tab was too shallow — it truncated prompt/response to ~200 chars and never showed latency, per-call cost, model parameters, or error status, even though the underlying data was already fully captured by iteration 85's instrumentation.
+- **Backend**: `inferenceCalls` in `buildLineageGraph` gained `endTime`, `modelParameters`, `statusMessage` — real fields Langfuse's own schema already returns (confirmed against the vendored fork's Fern spec) that just weren't being forwarded.
+- **Frontend**: inference-call rows now show latency, per-call token/cost, model params, and full expandable prompt/response (matching this codebase's existing `<details>` convention). Retrieval contexts now show the query alongside the full context. Tool calls show full arguments plus an explicit note that this product records tool-call intent only, not execution results.
+- **Real bug found and fixed**: the running dev server had started before an earlier `npm run build` completed, so it was serving a stale bundle — the entire Lineage tab was invisible to the user despite being fully shipped. `express.static`'s `staticPath` is resolved once at process startup; fixed by restarting the server. Worth remembering going forward: **restart the server after every frontend build**, or UI changes won't appear.
+- **Verification**: full detail — real per-call data (54.4s CPU-inference latency, real token/cost breakdown) and confirmation the served JS bundle actually contains the new UI — in `EVIDENCE.md` § 19.
+
+## Change log — iteration 89 (lineage: real model-decision signal; explicit non-claim on weights/attention)
+
+- **Trigger**: follow-up feedback correctly pointed out the lineage view showed what happened in this product, not inside the model — how did it decide, using what context/weights. Needed both an honest boundary statement (weights/attention are not obtainable via any LLM API, a hard technical wall no observability tool including the real Langfuse crosses) and to close the real part of the gap.
+- **Found real signal already computed but silently discarded**: `callProviderAdapter` (the chokepoint wrapping all 11 provider bridges) never forwarded `finishReason` (already extracted per-adapter for the finish-reason assertion), `modelParameters` (temperature/maxTokens — `emitObservation` already had the field, unused), or `logProbs` (already extracted for the perplexity assertion, opt-in via `libraryConfig.requestLogprobs`) into the GENERATION observation. Now all three reach lineage, plus the full raw unparsed provider response (mirrors the existing "View raw provider response" convention already used for eval results).
+- **Live verification**: fresh eval run confirmed real values — `finishReason: "stop"`, `modelParameters: {temperature: 0, maxTokens: 400}`, full raw OpenAI-compatible response body preserved, `logProbs` honestly absent (this target never opted in) rather than fabricated.
+- **Verification**: full detail in `EVIDENCE.md` § 20.
+
+## Change log — iteration 90 (lineage: fixed unreadable Graph tab — identical node labels)
+
+- **Trigger**: a real screenshot showed the actual problem — the Graph tab (default landing view) rendered every GENERATION node with the literal same label (`provider-call:openai-compatible`) and every SPAN node with the same label (`eval run execution`), regardless of model/outcome/timestamp. A display bug, not a missing-data problem — every field needed was already on `node.data`.
+- **Fix**: `layoutLineageGraph`'s new `buildLabel()` reads type-specific real fields per node — GENERATION shows model + token count + error flag + time; SPAN shows stage key + real pass/fail count (from the existing `assuranceEvidence` facet) + time. Added a color legend and a one-line caption above the graph.
+- **Live verification**: confirmed the real node data the new labels read (`model: "qwen2.5:1.5b-instruct"`, `usage.total: 33`, `assuranceEvidence: {pass:1, total:1}`) and that they render as intended. Frontend rebuilt, server restarted, confirmed serving the new bundle.
+- **Verification**: full detail in `EVIDENCE.md` § 21.
