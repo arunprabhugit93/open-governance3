@@ -4171,6 +4171,8 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
                 const end = call.endTime ? new Date(String(call.endTime)) : null;
                 const latencyMs = start && end ? end.getTime() - start.getTime() : null;
                 const level = String(call.level || 'DEFAULT');
+                const logProbs = Array.isArray(call.logProbs) ? (call.logProbs as number[]) : null;
+                const avgLogProb = logProbs?.length ? logProbs.reduce((a, b) => a + b, 0) / logProbs.length : null;
                 return (
                   <div className="finding-row" key={i}>
                     <p>
@@ -4190,9 +4192,22 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
                       {Number(usage.input || 0)} in / {Number(usage.output || 0)} out / {Number(usage.total || 0)} total
                       {typeof cost.total === 'number' ? ` · $${cost.total.toFixed(6)}` : ' · cost unknown'}
                     </p>
+                    {call.finishReason ? (
+                      <p className="muted">
+                        Stopped because: <strong>{String(call.finishReason)}</strong> (natural end, length cap, stop
+                        sequence, or content filter — as reported by the provider itself)
+                      </p>
+                    ) : null}
+                    {avgLogProb !== null ? (
+                      <p className="muted">
+                        Avg. per-token confidence in its own output: <strong>{(Math.exp(avgLogProb) * 100).toFixed(1)}%</strong>{' '}
+                        (real per-token logprob from the provider, averaged over {logProbs!.length} tokens — not an
+                        estimate)
+                      </p>
+                    ) : null}
                     {params && Object.keys(params).length ? (
                       <details>
-                        <summary>Model parameters</summary>
+                        <summary>Model / sampling parameters</summary>
                         <pre className="config-preview">{JSON.stringify(params, null, 2)}</pre>
                       </details>
                     ) : null}
@@ -4208,6 +4223,14 @@ function LineageWorkspace({ detail, token }: { detail: TargetDetailResponse; tok
                         {typeof call.output === 'string' ? call.output : JSON.stringify(call.output, null, 2)}
                       </pre>
                     </details>
+                    {call.rawResponse !== undefined && call.rawResponse !== null ? (
+                      <details>
+                        <summary>Full raw provider response (everything the provider returned, unparsed)</summary>
+                        <pre className="config-preview">
+                          {typeof call.rawResponse === 'string' ? call.rawResponse : JSON.stringify(call.rawResponse, null, 2)}
+                        </pre>
+                      </details>
+                    ) : null}
                   </div>
                 );
               })

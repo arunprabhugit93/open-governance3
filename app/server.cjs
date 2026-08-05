@@ -4281,6 +4281,9 @@ async function callProviderAdapter(adapter, args) {
       input: { systemPrompt: args.systemPrompt, prompt: args.prompt },
       output: result ? result.output : undefined,
       model: args.model,
+      // Real sampling parameters that actually governed how the model chose its output —
+      // temperature/maxTokens as sent on the request, not inferred after the fact.
+      modelParameters: { temperature: args.temperature, maxTokens: args.maxTokens },
       usage: result ? lineage.toLangfuseUsage(result.tokenUsage) : undefined,
       level: errorMessage ? 'ERROR' : 'DEFAULT',
       statusMessage: errorMessage,
@@ -4294,6 +4297,23 @@ async function callProviderAdapter(adapter, args) {
           baseUrl: args.baseUrl,
         },
         targetId: ctx.targetId,
+        // Why the model stopped generating where it did (natural end, length cap, stop
+        // sequence, content filter) — already extracted per-adapter for the finish-reason
+        // assertion type (see callOpenAICompatible etc.), just never reached lineage before.
+        finishReason: result ? result.finishReason : undefined,
+        // Per-token logprobs of the model's OWN chosen tokens — only present when the target's
+        // libraryConfig opts into `requestLogprobs` (see callOpenAICompatible) and the provider
+        // actually returns them; absent (not zero/fabricated) otherwise. This is the closest
+        // thing an API response can honestly offer to "how confident was the model in what it
+        // said" — real per-token log-probability, not a guessed confidence score.
+        logProbs: result && Array.isArray(result.logProbs) && result.logProbs.length ? result.logProbs : undefined,
+        // The full, unparsed provider response — preserves anything a specific provider/model
+        // returned that this product's own adapter doesn't parse into a named field (e.g. a
+        // reasoning-capable model's own thinking/reasoning_content block, safety ratings,
+        // system fingerprints). Nothing here is inferred or summarized — it's the literal
+        // response body, same as the "View raw provider response" convention already used for
+        // eval results elsewhere in this product.
+        rawResponse: result ? result.rawResponse : undefined,
       },
     });
     // Agent-target tool-call lineage — reuses this product's existing extractToolCalls()
@@ -8848,6 +8868,14 @@ async function buildLineageGraph(target) {
           cost: obs.costDetails,
           level: obs.level,
           statusMessage: obs.statusMessage,
+          // Why the model stopped where it did, its real per-token confidence (when the target
+          // opted into requestLogprobs and the provider returned it), and the full unparsed
+          // response — see the real-signal note in callProviderAdapter for why these are the
+          // honest ceiling of what an API-based, multi-provider architecture can expose about a
+          // model's own decision process (no API exposes weights/attention internals).
+          finishReason: obsMeta.finishReason,
+          logProbs: obsMeta.logProbs,
+          rawResponse: obsMeta.rawResponse,
         });
       } else if (obs.type === 'RETRIEVER') {
         retrievalContexts.push({ traceId: detail.id, observationId: obs.id, input: obs.input, output: obs.output, metadata: obsMeta });

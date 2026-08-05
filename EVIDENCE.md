@@ -1434,3 +1434,80 @@ Result: **Pass** — the Lineage tab's Inference calls view now actually
 answers "what did it send and how did it respond" in full, not a
 200-character preview. Live-verified against real (not synthetic) data
 including a real 54-second CPU-inference latency figure.
+
+## 20. Lineage — surfacing real model-decision signal (finish reason, sampling params, logprob confidence, raw response); explicit non-claim on weights/attention
+
+**Scope**: follow-up feedback on § 19 asked, correctly, why the lineage
+view shows what happened in *this product* but not what happened
+*inside the model* — how did it decide, using what context, what
+weights. This section draws the line explicitly, then closes the real
+part of the gap.
+
+**What is not achievable, and why this is a hard technical wall, not a
+product shortcoming**: weights, attention patterns, and "memory"
+internals are not exposed by any LLM API — OpenAI, Anthropic, Google,
+Groq, Ollama, none of them. Obtaining that would require an
+instrumented forward pass against the running model weights (a
+mechanistic-interpretability capability), a fundamentally different and
+far more invasive thing than calling an API and logging the
+request/response. The real, upstream Langfuse does not expose this
+either — no production observability tool does, because the data simply
+never crosses the API boundary. This is stated here rather than
+silently worked around.
+
+**What was real and already computed, but was being silently discarded
+before reaching lineage** — found by re-reading `callProviderAdapter`
+(the single chokepoint wrapping all 11 provider bridges):
+- **`finishReason`** — every one of the 11 adapters already extracts
+  this from the provider's own response (`choice.finish_reason` /
+  `body.stop_reason` / etc., pre-existing code for the `finish-reason`
+  assertion type) but it never reached the GENERATION observation's
+  metadata. Now included — the model's own stated reason for stopping
+  (natural end, length cap, stop sequence, content filter).
+- **`modelParameters`** — `emitObservation` already had a native
+  `modelParameters` field (used nowhere) and `args.temperature`/
+  `args.maxTokens` were already available at the exact point the
+  GENERATION observation is built. Now passed through — the real
+  sampling parameters that governed how deterministic vs. exploratory
+  the model's choice was.
+- **`logProbs`** — `callOpenAICompatible` already extracts real
+  per-token logprobs from `choices[0].logprobs.content[]` for the
+  existing perplexity-assertion feature, opt-in per target via
+  `libraryConfig.requestLogprobs` (some OpenAI-compatible providers
+  reject the request outright otherwise, per that code's own comment).
+  Now surfaced in lineage too, converted to an average per-token
+  confidence percentage (`exp(avgLogProb) * 100`) — real, not
+  estimated, and honestly absent (not zero) for the large majority of
+  targets that never opted in.
+- **`rawResponse`** — the full, unparsed provider response body is now
+  attached to the observation's metadata and rendered as an expandable
+  "Full raw provider response" block, mirroring the exact
+  `<details>/View raw provider response` convention already used for
+  eval results elsewhere in this product. This is the honest ceiling:
+  whatever the specific provider/model actually returned — including
+  any reasoning/thinking content a reasoning-capable model might emit
+  in its own response schema — is preserved verbatim rather than
+  silently dropped by this product's own parsing, without inventing a
+  per-provider reasoning-extraction convention this codebase doesn't
+  already have.
+
+**Live verification**: ran a fresh eval against the same target
+(`4687a594-...`) and queried `GET .../lineage` afterward. Confirmed on
+the newest GENERATION observation:
+```
+finishReason: "stop"                                    (real, from the model's own response)
+modelParameters: { temperature: 0, maxTokens: 400 }      (real, the actual request parameters)
+rawResponse keys: id, object, created, model,
+                   system_fingerprint, choices, usage     (the full OpenAI-compatible body, nothing dropped)
+logProbs: absent                                          (honest — this target never set requestLogprobs)
+```
+Confirmed the built frontend bundle contains the new UI copy ("Stopped
+because", "Avg. per-token confidence", "Full raw provider response").
+
+Result: **Pass with an explicit boundary stated up front** — surfaced
+every real, already-computed decision signal an API-based architecture
+can honestly offer (finish reason, sampling parameters, per-token
+confidence when opted in, full raw response), while being explicit that
+weight/attention-level interpretability is outside what any API-based
+lineage tool — including the real Langfuse — can provide, rather than
+fabricating a plausible-looking "why" that no data backs.
