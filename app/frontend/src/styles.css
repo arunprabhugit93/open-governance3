@@ -419,7 +419,7 @@ button { font-family: var(--font-sans); }
 .form { display: flex; flex-direction: column; gap: 16px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .span-2 { grid-column: span 2; }
-.span-3 { grid-column: span 3; }
+.span-3 { grid-column: 1 / -1; }
 
 .form-section { display: flex; flex-direction: column; gap: 14px; padding: 20px; }
 .form-section + .form-section { border-top: 1px solid var(--line-faint); }
@@ -483,7 +483,24 @@ textarea { resize: vertical; min-height: 84px; }
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
 }
 .generated-preview { display: flex; flex-direction: column; gap: 12px; }
-.config-preview { display: flex; flex-direction: column; gap: 10px; }
+.config-preview {
+  margin: 0;
+  display: block;
+  background: #0d1526;
+  color: #dbe4f5;
+  border: 1px solid #1c2740;
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 420px;
+  min-width: 0;
+}
 
 /* ---------- Key-value & definition lists ---------- */
 .key-value-list { display: flex; flex-direction: column; }
@@ -650,7 +667,7 @@ textarea { resize: vertical; min-height: 84px; }
 
 /* Import panel */
 .import-panel { display: flex; flex-direction: column; }
-.import-panel .import-textarea { margin: 0 20px 18px; border-color: var(--line); background: var(--surface-subtle); }
+.import-panel .import-textarea { width: auto; margin: 0 20px 18px; border-color: var(--line); background: var(--surface-subtle); }
 .import-panel .import-textarea:focus { background: var(--surface); }
 
 /* Registry filters */
@@ -764,7 +781,7 @@ textarea { resize: vertical; min-height: 84px; }
 .eval-builder { display: grid; grid-template-columns: minmax(0,1.7fr) minmax(280px,0.8fr); gap: 20px; align-items: start; }
 .eval-builder-main, .eval-builder-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .eval-builder-side { position: sticky; top: 84px; }
-.stage-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.stage-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; margin-bottom: 14px; }
 .stage-head h2 { font-size: 17px; letter-spacing: -0.01em; }
 .stage-head p { font-size: 13px; margin-top: 3px; }
 .stage-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
@@ -783,15 +800,25 @@ textarea { resize: vertical; min-height: 84px; }
 .assertion-subrow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px 12px; align-items: center; }
 .assertion-subset { grid-column: 1 / -1; }
 .prompt-row { grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr) auto; }
-.prompt-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.provider-row { grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.8fr) minmax(0, 1.4fr) auto; }
+.prompt-meta { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; }
+.prompt-meta .ghost-button { white-space: normal; text-align: left; }
 .provider-diagnostic { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr); gap: 10px 16px; align-items: start; padding: 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); background: var(--surface-sunken); }
 .testcase-row { grid-template-columns: minmax(200px, 1.2fr) minmax(0, 1.8fr) auto; }
 .dataset-row { grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr) auto auto; }
+/* Provider config form (single usage) — a 3-column form grid, not a compact
+   list row; span-2 fields take two of the three tracks, span-3 goes full width. */
+.provider-row { grid-template-columns: minmax(190px, 0.9fr) minmax(150px, 0.7fr) minmax(0, 1fr); align-items: start; }
+.provider-row .span-2 { grid-column: span 2; }
 .schedule-row { grid-template-columns: minmax(180px, 1fr) minmax(140px, 0.8fr) auto auto; }
 .plan-row { grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.8fr) minmax(0, 1.4fr) auto; }
 .control-row { grid-template-columns: minmax(220px, 1fr) minmax(0, 1.6fr); align-items: start; }
 .custom-probe-row { grid-template-columns: minmax(200px, 1fr) minmax(0, 1.6fr) auto; }
+/* Dataset & CyberSecEval rows live in the narrow eval side column; stack the
+   content over its action buttons so nothing overflows the ~330px track. */
+.eval-builder-side .dataset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.eval-builder-side .dataset-row > div { flex: 1 1 100%; min-width: 0; }
+.eval-builder-side .dataset-row > div strong { word-break: break-word; }
+.eval-builder-side .dataset-row > button { flex: 0 0 auto; }
 .control-breakdown { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-left: 3px solid var(--primary-soft); border-radius: 0 var(--radius-md) var(--radius-md) 0; background: var(--surface-subtle); }
 
 /* ============ Results ============ */
